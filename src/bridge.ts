@@ -244,6 +244,8 @@ export class Bridge {
   private readonly archivePending = new Map<string, { path: string; count: number; from: number; to: number; preparedAt: number }>()
   /** 各聊天连续几条回复没带表情（到阈值就在注入里轻推一把）。 */
   private readonly repliesSinceMeme = new Map<string, number>()
+  /** 归档连续几轮没产出（到 3 就丢弃重建）。 */
+  private readonly archiveMiss = new Map<string, number>()
   /** 最近发过的表情文件（避免连续重复同一张）。 */
   private readonly recentMemeFiles: string[] = []
   /** 机器人自己的 QQ（配置没填时用 get_login_info 取一次后缓存）。 */
@@ -445,34 +447,90 @@ export class Bridge {
     }
   }
 
-  /** 处理模型输出里的 <归档>…</归档> 块：存摘要/人物卡，并从发往 QQ 的文本里剥离。 */
-  private async consumeArchiveBlock(key: string, text: string): Promise<string> {
-    const match = /<归档>\s*([\s\S]*?)\s*<\/归档>/.exec(text)
-    const pending = this.archivePending.get(key)
-    if (match === null) return text
-    const body = (match[1] ?? '').trim()
-    const cleaned = text.replace(match[0], '').trim()
-    if (pending === undefined) return cleaned
-    this.archivePending.delete(key)
-    try {
-      const parsed = JSON.parse(body) as {
-        summary?: unknown
-        people?: Array<{ name?: unknown; style?: unknown; topics?: unknown }>
-        glossary?: unknown
-        setting?: unknown
+  /** 从候选块里抽第一个能解析的归档 JSON（容忍代码块围栏与前后文字）。 */
+  private pickArchiveJson(blocks: readonly string[]): Record<string, unknown> | undefined {
+    for (const block of blocks) {
+      const cleaned = block.replace(/```[a-zA-Z]*/g, '')
+      const start = cleaned.indexOf('{')
+      const end = cleaned.lastIndexOf('}')
+      if (start < 0 || end <= start) continue
+      try {
+        const parsed = JSON.parse(cleaned.slice(start, end + 1)) as unknown
+        if (parsed !== null && typeof parsed === 'object') return parsed as Record<string, unknown>
+      } catch {
+        continue
       }
+    }
+    return undefined
+  }
+
+  private bumpArchiveMiss(key: string): number {
+    const next = (this.archiveMiss.get(key) ?? 0) + 1
+    this.archiveMiss.set(key, next)
+    return next
+  }
+
+  /**
+   * 处理模型输出里的归档块：存摘要/人物卡，并从发往 QQ 的文本里剥离。
+   * 容错：`<归档>…</归档>`、`<archive>…</archive>`、`【归档】…`、以及包在 ``` 代码块里的写法。
+   */
+  private async consumeArchiveBlock(key: string, text: string): Promise<string> {
+    const pending = this.archivePending.get(key)
+    // 1) 收集所有可能的归档块
+    const blocks: string[] = []
+    const tagRe = /<\s*(?:归档|archive)\s*>([\s\S]*?)<\s*\/\s*(?:归档|archive)\s*>/gi
+    let stripped = text
+    for (const match of text.matchAll(tagRe)) {
+      blocks.push(match[1] ?? '')
+      stripped = stripped.replace(match[0], '')
+    }
+    if (blocks.length === 0) {
+      const cn = /【\s*归档\s*】([\s\S]*?)(?=【|$)/.exec(text)
+      if (cn !== null) {
+        blocks.push(cn[1] ?? '')
+        stripped = stripped.replace(cn[0], '')
+      }
+    }
+    if (blocks.length === 0) {
+      // 没块：计入"未完成"，连续 3 轮没产出就丢弃重建（并提示可能是模型没照做）
+      if (pending !== undefined) {
+        const misses = await this.bumpArchiveMiss(key)
+        this.opts.log('info', '本轮没等到归档块（连续第 ' + misses + ' 轮）: ' + key)
+        if (misses >= 3) {
+          this.archivePending.delete(key)
+          this.opts.log('warn', '归档连续 3 轮没产出，已丢弃该批次（下次重新准备）: ' + key)
+        }
+      }
+      return text
+    }
+    // 2) 从块里抽 JSON（容忍代码块围栏、前后多余文字）
+    const parsed = this.pickArchiveJson(blocks)
+    const cleaned = stripped.replace(/```[a-z]*\s*$/gim, '').replace(/\n{3,}/g, '\n\n').trim()
+    if (parsed === undefined) {
+      this.opts.log('warn', '归档块解析失败（JSON 不合法），已从回复里剥离但没存: ' + key
+        + ' 片段=' + (blocks[0] ?? '').slice(0, 120))
+      return cleaned
+    }
+    if (pending === undefined) {
+      this.opts.log('info', '收到归档块但没有待处理批次（可能已超时），只剥离不保存: ' + key)
+      return cleaned
+    }
+    this.archivePending.delete(key)
+    this.archiveMiss.delete(key)
+    try {
       const summary = typeof parsed.summary === 'string' ? parsed.summary.trim() : ''
       if (summary !== '') {
         await this.mem.appendSummary(key, { from: pending.from, to: pending.to, text: summary })
       }
       if (Array.isArray(parsed.people) && parsed.people.length > 0) {
         const people = await this.mem.readPeople(key)
-        for (const item of parsed.people.slice(0, 5)) {
-          const name = typeof item?.name === 'string' ? item.name.trim() : ''
+        for (const raw of parsed.people.slice(0, 5)) {
+          const item = raw as { name?: unknown; style?: unknown; topics?: unknown }
+          const name = typeof item.name === 'string' ? item.name.trim() : ''
           if (name === '') continue
-          const style = typeof item?.style === 'string' ? item.style.trim() : ''
-          const topics = Array.isArray(item?.topics)
-            ? item.topics.filter((topic): topic is string => typeof topic === 'string').slice(0, 5)
+          const style = typeof item.style === 'string' ? item.style.trim() : ''
+          const topics = Array.isArray(item.topics)
+            ? (item.topics as unknown[]).filter((topic): topic is string => typeof topic === 'string').slice(0, 5)
             : []
           const prev = people[name] ?? {}
           people[name] = {
@@ -483,7 +541,6 @@ export class Bridge {
         }
         await this.mem.savePeople(key, people)
       }
-      // 黑话/规矩：有就顺手交给模型下轮写入长期记忆（这里先只落摘要与人物卡，避免插件代写 mnemon）
       await this.mem.saveArchiveState(key, { archivedUpTo: pending.to, lastAt: Date.now() })
       this.opts.log('info', '归档完成 ' + key + '：' + pending.count + ' 条 → 摘要' + (summary !== '' ? '✓' : '✗')
         + (Array.isArray(parsed.people) ? '，人物 ' + parsed.people.length + ' 位' : ''))
@@ -737,7 +794,11 @@ export class Bridge {
         const query = history.slice(-5).join(' ')
         const recalled = query === '' ? '' : await this.mem.recall(ref.key, query, chat.agent)
         const spaceId = await this.mem.ensureSpace(ref.key, chat.agent)
-        memoryBlock = this.mem.buildInjection({ chatKey: ref.key, recent: history, recallText: recalled, spaceId, recentExpressions: this.recentMemeCaptions, archiveTask: this.archivePending.get(ref.key), summaries: await this.mem.readSummaries(ref.key, 3), people: await this.peopleFor(ref.key), memeNudge: this.memeNudgeFor(ref.key) })
+        const archiveTask = this.archivePending.get(ref.key)
+        if (archiveTask !== undefined) {
+          this.opts.log('info', '本轮注入含归档任务: ' + ref.key + '（' + archiveTask.count + ' 条）')
+        }
+        memoryBlock = this.mem.buildInjection({ chatKey: ref.key, recent: history, recallText: recalled, spaceId, recentExpressions: this.recentMemeCaptions, archiveTask, summaries: await this.mem.readSummaries(ref.key, 3), people: await this.peopleFor(ref.key), memeNudge: this.memeNudgeFor(ref.key) })
       } catch (error) {
         this.opts.log('debug', '记忆注入失败: ' + (error instanceof Error ? error.message : String(error)))
       }
