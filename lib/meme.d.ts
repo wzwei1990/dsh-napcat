@@ -30,6 +30,12 @@ export declare class MemeLibrary {
     /** 同情绪里随机抽一张（描述匹配不上时的兜底），只从没发过的里面挑；该情绪用光就返回 undefined。 */
     randomInTag(tag: string, avoid?: Set<string>, random?: () => number): Promise<MemeHit | undefined>;
     /**
+     * 精确命中：描述**完全等于**某张图的 caption（模型抄的是候选原文）。
+     * 这种情况必须返回那一张，不能再参与"避重换图"——否则 Web 端按同一段描述
+     * 显示的是这张、QQ 端却换成另一张，同一个回复两边不一致。
+     */
+    exact(caption: string): Promise<MemeHit | undefined>;
+    /**
      * 全场随机（不限情绪），只避开最近发过的 —— 同情绪图用光时扩池，
      * 让轮换范围从「3 张开心」扩到「整个图库」。
      */

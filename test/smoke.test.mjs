@@ -2,6 +2,7 @@
 // 运行：npm run build && node --test test/
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { tmpdir } from 'node:os'
 
 import { base64UrlToBuffer, isHttpUrl, nameFromRef, safeName } from '../lib/media.js'
 import { MemoryStore } from '../lib/memory.js'
@@ -380,4 +381,48 @@ test('表情匹配：2-gram + 中文同义词都能命中', async () => {
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+test('表情一致性：caption 原文精确命中，多次结果相同', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { DatabaseSync } = await import('node:sqlite')
+  const { MemeLibrary } = await import('../lib/meme.js')
+  const root = mkdtempSync(join(tmpdir(), 'meme-exact-'))
+  try {
+    const pack = join(root, 'pack1')
+    mkdirSync(join(pack, 'daily'), { recursive: true })
+    writeFileSync(join(pack, 'daily', 'a.jpg'), 'x')
+    writeFileSync(join(pack, 'daily', 'b.jpg'), 'x')
+    const db = new DatabaseSync(join(pack, 'index.db'))
+    db.exec('CREATE TABLE memes (path TEXT PRIMARY KEY, tag TEXT, file_name TEXT, caption TEXT, keywords TEXT)')
+    db.prepare('INSERT INTO memes (path, tag, file_name, caption, keywords) VALUES (?,?,?,?,?)').run('daily/a.jpg', 'daily', 'a.jpg', '捧着碗干饭', '干饭')
+    db.prepare('INSERT INTO memes (path, tag, file_name, caption, keywords) VALUES (?,?,?,?,?)').run('daily/b.jpg', 'daily', 'b.jpg', '摸鱼躺平', '躺平')
+    db.close()
+    const lib = new MemeLibrary([root], () => undefined)
+    const first = await lib.exact('捧着碗干饭')
+    const second = await lib.exact('捧着碗干饭')
+    assert.equal(first?.file, second?.file)
+    assert.ok(first?.file.endsWith('a.jpg'))
+    // 不是完整 caption 时不走精确路径
+    assert.equal(await lib.exact('干饭'), undefined)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+test('记忆注入：带最近发过的表情，提醒别连用', () => {
+  const store = new MemoryStore({
+    ctx: {}, root: tmpdir(), spacePrefix: 'napcat-', backend: 'file',
+    recentLimit: 200, injectRecent: 5, injectMaxChars: 6000, log: () => undefined,
+  })
+  const text = store.buildInjection({
+    chatKey: 'group:1', recent: [], recallText: '', spaceId: 'x',
+    recentExpressions: ['捧着蓝碗干饭，星星眼吃得很香', '摸鱼躺平，半睁眼摊着不想动'],
+  })
+  assert.ok(text.includes('【最近发过的表情】'))
+  assert.ok(text.includes('捧着蓝碗干饭'))
+  assert.ok(text.includes('别连着用同一个描述'))
+  // 没有历史时不出现这个块
+  const plain = store.buildInjection({ chatKey: 'group:1', recent: [], recallText: '', spaceId: 'x' })
+  assert.ok(!plain.includes('【最近发过的表情】'))
 })

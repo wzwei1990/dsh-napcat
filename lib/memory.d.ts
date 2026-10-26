@@ -83,5 +83,6 @@ export declare class MemoryStore {
         recallText?: string;
         mention?: string;
         spaceId?: string;
+        recentExpressions?: readonly string[];
     }): string;
 }
