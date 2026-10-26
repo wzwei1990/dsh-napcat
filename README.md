@@ -165,6 +165,23 @@ imageCacheRetentionDays: 7      # 超期目录自动清理
 - **没装 dsh-meme 也有表情**：`[表情:…]` 按关键词换成 **QQ 原生小黄脸**（开心→😊、生气→😠、无语→😓、干饭→🍚…共 20 个词），不下载任何图片、不依赖插件；`[图片:路径]` 与 markdown 图片同样不依赖表情插件。
 - 关掉：`memeEnabled: false`（表情不再解析），或 `memeDirs` 指定自己的图库目录。
 
+### 总开关（不连 NapCat）
+
+```yaml
+enabled: false    # 默认 true
+```
+
+- **关掉后**：不建立 NapCat 连接、不处理任何消息、也不发送（发送路径直接 return）
+- 插件仍然加载（设置页、工具都在），**改回 true 立即重连**，不用重启 DSH
+- 适合：临时停用、换账号前先断开、排查"是不是插件在抢消息"
+
+与 `dryRun` 的区别：
+
+| 配置 | 连 NapCat | 跑模型 | 发消息 |
+|---|---|---|---|
+| `enabled: false` | ❌ | ❌ | ❌ |
+| `dryRun: true` | ✅ | ✅ | ❌（只记日志） |
+
 ### 只读模式（本地 + 云端同时跑）
 
 两个实例连同一个 QQ 会**双发消息**（每个实例都会回复同一句）。稳妥做法：
@@ -306,6 +323,7 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `requireMention` | `true` | 群聊是否必须 @；关键字/回复命中则不需要 |
 | `ignoreSelf` | `true` | 忽略机器人自己发的消息 |
 | `replyAsQuote` | `false` | 回复时是否引用原消息 |
+| `enabled` | `true` | 总开关：关掉不连 NapCat、不处理消息、不发送 |
 | `dryRun` | `false` | 只读模式：不向 QQ 发送任何消息（本地测试用，避免与线上双发） |
 | `memeEnabled` | `true` | 把 `[表情:描述]` 解析成 dsh-meme 图库里的图并发送 |
 | `memeLooseFallback` | `false` | 描述/情绪都匹配不上时是否仍随机发图（默认关，避免不贴题） |

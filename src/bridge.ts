@@ -1461,6 +1461,10 @@ export class Bridge {
 
   /** 统一的发送入口：重试 + 禁言探测；dryRun 时只记日志并返回成功。 */
   private async sendSegments(chat: ChatState, message: ObSegment[]): Promise<boolean> {
+    if (!this.opts.config.enabled) {
+      this.opts.log('debug', '插件已禁用（enabled=false），跳过发送')
+      return false
+    }
     if (this.opts.config.dryRun) {
       this.opts.log('info', '[dryRun] 本应发送到 ' + chat.ref.key + ': ' + JSON.stringify(message.slice(0, 2)).slice(0, 200))
       return true

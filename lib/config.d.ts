@@ -1,6 +1,8 @@
 /** 插件配置（schemastery 校验，全部带默认值，Web UI 设置页可直接改）。 */
 import type Z from '@deepseek-ai/schemastery';
 export interface Config {
+    /** 总开关：关掉后不连接 NapCat、也不处理任何消息。 */
+    enabled: boolean;
     /** forward = 本插件主动连 NapCat 的 ws；reverse = 本插件监听、NapCat 拨进来。 */
     mode: 'forward' | 'reverse';
     /** forward 模式：NapCat 的 WebSocket 地址（如 ws://<napcat-host>:3001）。 */

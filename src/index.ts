@@ -95,9 +95,26 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
       if (ns !== 'dsh-napcat') return
       const next = resolveConfig(rawConfig)
       if (JSON.stringify(next) === JSON.stringify(config)) return
+      const wasEnabled = config.enabled
       Object.assign(config, next)
-      log('info', '配置已更新（设置页保存），重建 NapCat 连接')
       bridge.refreshPersonas()
+      if (next.enabled !== wasEnabled) {
+        if (next.enabled) {
+          log('info', '开关已打开：连接 NapCat')
+          bridge.start()
+          conn.start()
+        } else {
+          log('info', '开关已关闭：断开 NapCat，停止处理消息')
+          void bridge.stop()
+          void conn.stop()
+        }
+        return
+      }
+      if (!next.enabled) {
+        log('info', '配置已更新，但插件处于禁用状态，保持断开')
+        return
+      }
+      log('info', '配置已更新（设置页保存），重建 NapCat 连接')
       conn.reconfigure({
         mode: next.mode,
         url: next.url,
@@ -110,6 +127,10 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
   )
 
   ctx.effect(() => {
+    if (!config.enabled) {
+      log('info', 'dsh-napcat 已禁用（enabled=false）：不连接 NapCat，也不处理任何消息')
+      return () => undefined
+    }
     bridge.start()
     conn.start()
     return async () => {
@@ -118,5 +139,5 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
     }
   })
 
-  log('info', 'dsh-napcat 已加载（mode=' + config.mode + (config.mode === 'forward' ? ', url=' + config.url : ', port=' + String(config.port)) + '）')
+  log('info', 'dsh-napcat 已加载（mode=' + config.mode + (config.mode === 'forward' ? ', url=' + config.url : ', port=' + String(config.port)) + (config.enabled ? '' : '，但已禁用（enabled=false）') + '）')
 }

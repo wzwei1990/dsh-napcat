@@ -4,6 +4,8 @@ import type Z from '@deepseek-ai/schemastery'
 import z from '@deepseek-ai/schemastery'
 
 export interface Config {
+  /** 总开关：关掉后不连接 NapCat、也不处理任何消息。 */
+  enabled: boolean
   /** forward = 本插件主动连 NapCat 的 ws；reverse = 本插件监听、NapCat 拨进来。 */
   mode: 'forward' | 'reverse'
   /** forward 模式：NapCat 的 WebSocket 地址（如 ws://<napcat-host>:3001）。 */
@@ -87,6 +89,8 @@ export interface Config {
 }
 
 export const Config: Z<Config> = z.object({
+  enabled: z.boolean().default(true)
+    .description('总开关：关掉后不连接 NapCat、也不处理任何消息（插件仍加载，随时可开）').volatile(),
   mode: z.union([z.const('forward'), z.const('reverse')]).default('forward')
     .description('连接方式：forward=本插件连 NapCat（NapCat 在别的机器上时用这个）；reverse=本插件监听、NapCat 拨进来').volatile(),
   url: z.string().default('')
@@ -172,6 +176,7 @@ export const Config: Z<Config> = z.object({
 
 /** 各字段的内置默认值（与 schema 的 default 保持一致，供 volatile 字段兜底）。 */
 export const DEFAULTS: Config = {
+  enabled: true,
   mode: 'forward',
   url: '',
   accessToken: '',

@@ -30,6 +30,7 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
 
       /** 设置页字段（与 src/config.ts 的 Config 一一对应）。 */
       const FIELDS = [
+        { key: 'enabled', label: '启用 NapCat 连接（关掉后不连 NapCat、不处理消息）', kind: 'boolean' },
         { key: 'mode', label: '连接方式', kind: 'select', options: [['forward', 'forward：插件连 NapCat'], ['reverse', 'reverse：NapCat 拨入']] },
         { key: 'url', label: 'NapCat WebSocket 地址', kind: 'text', placeholder: 'ws://<napcat-host>:3001' },
         { key: 'accessToken', label: 'Access Token', kind: 'password', placeholder: '与 NapCat 的 WebSocket 服务器一致' },
