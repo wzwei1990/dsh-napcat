@@ -66,6 +66,10 @@ export declare class Bridge {
     private readonly recentFaceIds;
     /** 最近用过的表情描述（注入给模型，提示它别连着用同一个）。 */
     private readonly recentMemeCaptions;
+    /** 待处理的归档批次（素材路径/条数/时间范围），随下一轮回复一起产出归档 JSON。 */
+    private readonly archivePending;
+    /** 各聊天连续几条回复没带表情（到阈值就在注入里轻推一把）。 */
+    private readonly repliesSinceMeme;
     /** 最近发过的表情文件（避免连续重复同一张）。 */
     private readonly recentMemeFiles;
     /** 机器人自己的 QQ（配置没填时用 get_login_info 取一次后缓存）。 */
@@ -82,6 +86,16 @@ export declare class Bridge {
     /** 供 napcat_memory_space 工具登记空间 id。 */
     /** 供 napcat_memory_space 工具登记空间 id。 */
     saveMemorySpace(chatKey: string, spaceId: string): Promise<void>;
+    /** 记一轮"带没带表情"：带了清零，没带 +1（供下轮注入做频率提示）。 */
+    private noteReplyMemeState;
+    /** 连续几条回复没带表情（到阈值才提示，0=关闭）。 */
+    private memeNudgeFor;
+    /** 人物群像 → 注入用数组（最多 6 个，避免占满预算）。 */
+    private peopleFor;
+    /** 攒够 archiveEvery 条就让模型蒸馏一次（写进注入的"归档任务"，随下一轮回复带出）。 */
+    private maybePrepareArchive;
+    /** 处理模型输出里的 <归档>…</归档> 块：存摘要/人物卡，并从发往 QQ 的文本里剥离。 */
+    private consumeArchiveBlock;
     /** 缓冲不足时才预热；同一聊天 5 分钟内最多尝试一次。 */
     private maybeWarmup;
     /** 用 NapCat 的历史消息接口预热 recent 缓冲（群 get_group_msg_history / 私聊 get_friend_msg_history）。 */

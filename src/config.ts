@@ -45,6 +45,7 @@ export interface Config {
   memeDirs: string
   memeRecentLimit: number
   memeLooseFallback: boolean
+  memeNudgeAfter: number
   outboundImageMaxBytes: number
   /** forward 模式连续失败多少次后放弃重连（0=无限）。 */
   reconnectMaxAttempts: number
@@ -82,8 +83,8 @@ export interface Config {
   recentLimit: number
   injectRecent: number
   injectMaxChars: number
-  warmupHistory: number
   warmupStaleMinutes: number
+  archiveEvery: number
   warmupImages: boolean
   warmupImageLimit: number
 }
@@ -126,6 +127,7 @@ export const Config: Z<Config> = z.object({
   dryRun: z.boolean().default(false).description('只读模式：不向 QQ 发送任何消息（本地测试用，避免和线上实例重复发言）').volatile(),
   faceFallback: z.boolean().default(true).description('图库没有对应图时，把 [表情:描述] 换成 QQ 原生小黄脸').volatile(),
   memeEnabled: z.boolean().default(true).description('允许把 [表情:描述] 解析成 dsh-meme 图库里的图并发送').volatile(),
+  memeNudgeAfter: z.natural().default(2).description('连续这么多条回复没带表情时，注入里提醒一次（0=不提醒）').volatile(),
   memeLooseFallback: z.boolean().default(false).description('描述和情绪都匹配不上时，是否仍随机发一张图（默认关：宁可不发也不发不贴题的）').volatile(),
   memeRecentLimit: z.number().default(-1).description('表情避重窗口：-1=按图库大小自动（约一半），0=不避重，正数=固定张数').volatile(),
   memeDirs: z.string().default('').description('表情库目录（分号/逗号分隔）；留空=自动扫描 DSH_HOME 下 dsh-meme 的 memes 目录').volatile(),
@@ -168,7 +170,7 @@ export const Config: Z<Config> = z.object({
   recentLimit: z.natural().default(200).description('每群保留最近多少条消息').volatile(),
   injectRecent: z.natural().default(20).description('触发时注入最近多少条对话').volatile(),
   injectMaxChars: z.natural().default(4000).description('记忆注入总字符上限').volatile(),
-  warmupHistory: z.natural().default(0).description('预热条数：缓冲不足这个条数就拉历史补齐（0=关闭）').volatile(),
+  archiveEvery: z.natural().default(50).description('归档节奏：攒够这么多条消息就让模型蒸馏一次摘要/人物卡（0=关闭）').volatile(),
   warmupStaleMinutes: z.natural().default(10).description('预热新鲜度：缓冲最新一条超过这么多分钟也算过期，会重新拉历史').volatile(),
   warmupImages: z.boolean().default(true).description('预热时把历史消息里的图片也缓存（用 file id 重新解析，解析不了=已过期）').volatile(),
   warmupImageLimit: z.natural().default(30).description('单次预热最多下载几张历史图片（每日配额之外的保护）').volatile(),
@@ -200,6 +202,7 @@ export const DEFAULTS: Config = {
   memeDirs: '',
   memeRecentLimit: -1,
   memeLooseFallback: false,
+  memeNudgeAfter: 2,
   outboundImageMaxBytes: 8388608,
   reconnectMaxAttempts: 0,
   workspacePath: '',
@@ -229,8 +232,8 @@ export const DEFAULTS: Config = {
   recentLimit: 200,
   injectRecent: 20,
   injectMaxChars: 4000,
-  warmupHistory: 0,
   warmupStaleMinutes: 10,
+  archiveEvery: 50,
   warmupImages: true,
   warmupImageLimit: 30,
 }

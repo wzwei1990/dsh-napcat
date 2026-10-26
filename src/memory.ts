@@ -33,6 +33,10 @@ export interface ChatLike {
 const RECENT_FILE = 'recent.jsonl'
 const SPACE_FILE = 'space.json'
 const NOTES_FILE = 'notes.md'
+const SUMMARY_FILE = 'summary.jsonl'
+const ARCHIVE_FILE = 'archive.json'
+const ARCHIVE_BATCH_FILE = 'archive-pending.jsonl'
+const PEOPLE_FILE = 'people.json'
 
 /** 从任意返回值里捞出文本（工具结果结构可能变，尽量宽松）。 */
 function collectText(value: unknown, depth = 0): string {
@@ -396,8 +400,7 @@ export class MemoryStore {
   }
 
   /** 读最近 N 条，返回「昵称: 内容」行。 */
-  async readRecent(chatKey: string, limit?: number): Promise<string[]> {
-    try {
+  async readRecent(chatKey: string, limit?: number): Promise<string[]> {    try {
       const content = await readFile(join(this.dirFor(chatKey), RECENT_FILE), 'utf8')
       const lines = content.split('\n').filter(part => part.trim() !== '').slice(-(limit ?? this.opts.injectRecent))
       const result: string[] = []
@@ -416,8 +419,110 @@ export class MemoryStore {
     }
   }
 
+  // ── 归档：把冷历史蒸馏成摘要 / 人物卡（三层记忆的"温层"）───────────────
+
+  /** 归档状态：已处理到哪条消息（时间戳）与上次归档时间。 */
+  async archiveState(chatKey: string): Promise<{ archivedUpTo: number; lastAt: number }> {
+    try {
+      const raw = await readFile(join(this.dirFor(chatKey), ARCHIVE_FILE), 'utf8')
+      const parsed = JSON.parse(raw) as { archivedUpTo?: unknown; lastAt?: unknown }
+      return {
+        archivedUpTo: typeof parsed.archivedUpTo === 'number' ? parsed.archivedUpTo : 0,
+        lastAt: typeof parsed.lastAt === 'number' ? parsed.lastAt : 0,
+      }
+    } catch {
+      return { archivedUpTo: 0, lastAt: 0 }
+    }
+  }
+
+  async saveArchiveState(chatKey: string, state: { archivedUpTo: number; lastAt: number }): Promise<void> {
+    const dir = await this.ensureDir(chatKey)
+    const path = join(dir, ARCHIVE_FILE)
+    const tmp = path + '.tmp'
+    await writeFile(tmp, JSON.stringify(state), 'utf8')
+    await rename(tmp, path)
+  }
+
+  /** 取出「还没归档」的消息（按时间正序，最多 limit 条）。 */
+  async pendingArchiveRows(chatKey: string, since: number, limit: number): Promise<Array<{ t: number; nick: string; text: string }>> {
+    try {
+      const content = await readFile(join(this.dirFor(chatKey), RECENT_FILE), 'utf8')
+      const rows: Array<{ t: number; nick: string; text: string }> = []
+      for (const line of content.split('\n')) {
+        if (line.trim() === '') continue
+        try {
+          const parsed = JSON.parse(line) as { t?: number; nick?: string; text?: string }
+          if (typeof parsed.t !== 'number' || parsed.t <= since) continue
+          rows.push({ t: parsed.t, nick: parsed.nick ?? '?', text: parsed.text ?? '' })
+        } catch {
+          // 坏行跳过
+        }
+      }
+      rows.sort((left, right) => left.t - right.t)
+      return rows.slice(0, Math.max(1, limit))
+    } catch {
+      return []
+    }
+  }
+
+  /** 把待归档批次落盘（模型用文件工具自己读，避免把几十条塞进注入）。 */
+  async writeArchiveBatch(chatKey: string, rows: Array<{ t: number; nick: string; text: string }>): Promise<string> {
+    const dir = await this.ensureDir(chatKey)
+    const path = join(dir, ARCHIVE_BATCH_FILE)
+    const lines = rows.map(row => JSON.stringify(row)).join('\n') + '\n'
+    await writeFile(path, lines, 'utf8')
+    return path
+  }
+
+  /** 追加一段归档摘要。 */
+  async appendSummary(chatKey: string, entry: { from: number; to: number; text: string }): Promise<void> {
+    const dir = await this.ensureDir(chatKey)
+    const path = join(dir, SUMMARY_FILE)
+    const line = JSON.stringify({ from: entry.from, to: entry.to, t: Date.now(), text: entry.text.slice(0, 1200) }) + '\n'
+    await appendFile(path, line, 'utf8')
+  }
+
+  /** 读最近 N 段摘要（新的在后）。 */
+  async readSummaries(chatKey: string, limit = 3): Promise<string[]> {
+    try {
+      const content = await readFile(join(this.dirFor(chatKey), SUMMARY_FILE), 'utf8')
+      const lines = content.split('\n').filter(part => part.trim() !== '').slice(-Math.max(1, limit))
+      const out: string[] = []
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line) as { text?: string }
+          if (typeof parsed.text === 'string' && parsed.text.trim() !== '') out.push(parsed.text.trim())
+        } catch {
+          // 坏行跳过
+        }
+      }
+      return out
+    } catch {
+      return []
+    }
+  }
+
+  /** 人物群像快照（名字 → 一句话画像）。 */
+  async readPeople(chatKey: string): Promise<Record<string, { names?: string[]; style?: string; topics?: string[] }>> {
+    try {
+      const raw = await readFile(join(this.dirFor(chatKey), PEOPLE_FILE), 'utf8')
+      const parsed = JSON.parse(raw) as Record<string, { names?: string[]; style?: string; topics?: string[] }>
+      return parsed !== null && typeof parsed === 'object' ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
+
+  async savePeople(chatKey: string, people: Record<string, { names?: string[]; style?: string; topics?: string[] }>): Promise<void> {
+    const dir = await this.ensureDir(chatKey)
+    const path = join(dir, PEOPLE_FILE)
+    const tmp = path + '.tmp'
+    await writeFile(tmp, JSON.stringify(people, null, 0), 'utf8')
+    await rename(tmp, path)
+  }
+
   /** 组装注入文本（含 @ 优先级指令），超预算截断。 */
-  buildInjection(parts: { chatKey: string; recent: readonly string[]; recallText?: string; mention?: string; spaceId?: string; recentExpressions?: readonly string[] }): string {
+  buildInjection(parts: { chatKey: string; recent: readonly string[]; recallText?: string; mention?: string; spaceId?: string; recentExpressions?: readonly string[]; archiveTask?: { path: string; count: number }; memeNudge?: number; summaries?: readonly string[]; people?: ReadonlyArray<{ name: string; style?: string; topics?: readonly string[] }> }): string {
     const blocks: string[] = []
     blocks.push('这个会话来自 QQ（NapCat 渠道），聊天对象是 ' + parts.chatKey + '。')
     if (parts.mention !== undefined && parts.mention !== '') {
@@ -472,6 +577,33 @@ export class MemoryStore {
     if (parts.recallText !== undefined && parts.recallText !== '') {
       blocks.push('【本群长期记忆（相关片段）】\n' + parts.recallText)
     }
+    // 归档任务：本轮顺带蒸馏一段摘要 + 人物卡（输出会被插件剥离，不会发给群友）
+    if (parts.archiveTask !== undefined) {
+      blocks.push('【本轮归档任务（顺手做，不改变你回答用户的内容）】'
+        + '\n素材文件：' + parts.archiveTask.path + '（' + parts.archiveTask.count + ' 条消息，JSONL 每行 {t,nick,text}；只读不改）'
+        + '\n在你的回复**最末尾**额外输出一段（用户看不到，插件会剥离并存档）：'
+        + '\n<归档>{"summary":"3~5 句，写人写事、不写流水账","people":[{"name":"昵称","style":"说话风格一句话","topics":["常聊话题"]}],"glossary":["黑话/梗"],"setting":["群规矩/称呼"]}</归档>'
+        + '\n要求：people 只写**有辨识度**的人，最多 5 个；没把握的字段留空数组或省略；其余字段没内容就省略。')
+    }
+    // 表情提醒：连着几条没带图时，轻推一把（不是命令，只是提示）
+    if (parts.memeNudge !== undefined && parts.memeNudge > 0) {
+      blocks.push('【这轮可以带个表情】最近 ' + parts.memeNudge + ' 条回复都没带表情包了；如果本轮气氛合适（吐槽、接梗、搞笑、卖萌），'
+        + '就在回复里加一个 [表情:描述]（优先图库图，写具体点或抄候选 caption）。不必硬凑。')
+    }
+    // 温层：归档摘要（近期脉络）——比原文省 token，又能跨几十轮保持连贯
+    if (parts.summaries !== undefined && parts.summaries.length > 0) {
+      blocks.push('【近期脉络（归档摘要，越靠后越新）】\n' + parts.summaries.map(line => '- ' + line).join('\n'))
+    }
+    // 人物群像：只有一句画像，别展开成小作文
+    if (parts.people !== undefined && parts.people.length > 0) {
+      const lines = parts.people.slice(0, 8).map(person => {
+        const bits: string[] = []
+        if (person.style !== undefined && person.style !== '') bits.push(person.style)
+        if (person.topics !== undefined && person.topics.length > 0) bits.push('常聊 ' + person.topics.slice(0, 3).join('/'))
+        return person.name + (bits.length > 0 ? '：' + bits.join('；') : '')
+      })
+      blocks.push('【本群人物（长期观察，说话时按这个认人）】\n' + lines.join('\n'))
+    }
     // 最近用过的表情描述：明确告诉它别连着用同一个，换候选/换情绪
     if (parts.recentExpressions !== undefined && parts.recentExpressions.length > 0) {
       blocks.push('【最近发过的表情】' + parts.recentExpressions.slice(0, 6).join('、')
@@ -484,7 +616,7 @@ export class MemoryStore {
       + '  ② 不想多搜一次 → 写**有画面感的具体词**（如 [表情:捧着碗干饭]、[表情:得意好耶]、[表情:抓狂崩溃]），插件按关键词去图库找；\n'
       + '  ③ 图库确实没有合适的 → 写简单情绪词（[表情:无语]），会退到同情绪图库，再退到会轮换的小黄脸。\n'
       + '匹配不到会自动降级，**不会白写也不会发错图**，所以拿不准时放心写。别直接用 emoji 字符（😊😌 这种每次同一个、也不进图库）。\n'
-      + '**节制用表情**：不是每条回复都配图，大概三四条里带一次就够；同一个描述/同一张别连着用，换候选或换情绪。\n'
+      + '**表情频率**：气氛对就发，大概**两条回复里带一次**（热聊/吐槽/接梗时更该带）；不要每条都配，也别连着用同一个描述或同一张。\n'
       + '这轮如果用工具生成了图片，请把文件路径用 [图片:绝对路径] 写进回复正文（一张一行），QQ 侧会作为真实图片消息发出去；'
       + '不要只说「图已生成」或只给文件名——没带 [图片:路径] 就等于没发出去。')
     // 群聊礼仪放最后：预算紧张时优先牺牲它，别挤掉 @ 段和长期记忆

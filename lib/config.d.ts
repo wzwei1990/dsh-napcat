@@ -42,6 +42,7 @@ export interface Config {
     memeDirs: string;
     memeRecentLimit: number;
     memeLooseFallback: boolean;
+    memeNudgeAfter: number;
     outboundImageMaxBytes: number;
     /** forward 模式连续失败多少次后放弃重连（0=无限）。 */
     reconnectMaxAttempts: number;
@@ -79,8 +80,8 @@ export interface Config {
     recentLimit: number;
     injectRecent: number;
     injectMaxChars: number;
-    warmupHistory: number;
     warmupStaleMinutes: number;
+    archiveEvery: number;
     warmupImages: boolean;
     warmupImageLimit: number;
 }

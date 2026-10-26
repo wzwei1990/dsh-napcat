@@ -76,6 +76,46 @@ export declare class MemoryStore {
     recentCount(chatKey: string): Promise<number>;
     /** 读最近 N 条，返回「昵称: 内容」行。 */
     readRecent(chatKey: string, limit?: number): Promise<string[]>;
+    /** 归档状态：已处理到哪条消息（时间戳）与上次归档时间。 */
+    archiveState(chatKey: string): Promise<{
+        archivedUpTo: number;
+        lastAt: number;
+    }>;
+    saveArchiveState(chatKey: string, state: {
+        archivedUpTo: number;
+        lastAt: number;
+    }): Promise<void>;
+    /** 取出「还没归档」的消息（按时间正序，最多 limit 条）。 */
+    pendingArchiveRows(chatKey: string, since: number, limit: number): Promise<Array<{
+        t: number;
+        nick: string;
+        text: string;
+    }>>;
+    /** 把待归档批次落盘（模型用文件工具自己读，避免把几十条塞进注入）。 */
+    writeArchiveBatch(chatKey: string, rows: Array<{
+        t: number;
+        nick: string;
+        text: string;
+    }>): Promise<string>;
+    /** 追加一段归档摘要。 */
+    appendSummary(chatKey: string, entry: {
+        from: number;
+        to: number;
+        text: string;
+    }): Promise<void>;
+    /** 读最近 N 段摘要（新的在后）。 */
+    readSummaries(chatKey: string, limit?: number): Promise<string[]>;
+    /** 人物群像快照（名字 → 一句话画像）。 */
+    readPeople(chatKey: string): Promise<Record<string, {
+        names?: string[];
+        style?: string;
+        topics?: string[];
+    }>>;
+    savePeople(chatKey: string, people: Record<string, {
+        names?: string[];
+        style?: string;
+        topics?: string[];
+    }>): Promise<void>;
     /** 组装注入文本（含 @ 优先级指令），超预算截断。 */
     buildInjection(parts: {
         chatKey: string;
@@ -84,5 +124,16 @@ export declare class MemoryStore {
         mention?: string;
         spaceId?: string;
         recentExpressions?: readonly string[];
+        archiveTask?: {
+            path: string;
+            count: number;
+        };
+        memeNudge?: number;
+        summaries?: readonly string[];
+        people?: ReadonlyArray<{
+            name: string;
+            style?: string;
+            topics?: readonly string[];
+        }>;
     }): string;
 }

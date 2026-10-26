@@ -426,3 +426,55 @@ test('记忆注入：带最近发过的表情，提醒别连用', () => {
   const plain = store.buildInjection({ chatKey: 'group:1', recent: [], recallText: '', spaceId: 'x' })
   assert.ok(!plain.includes('【最近发过的表情】'))
 })
+test('配置面收敛：预热目标由 recentLimit 承担，warmupHistory 已移除', async () => {
+  const { DEFAULTS, Config } = await import('../lib/config.js')
+  assert.equal('warmupHistory' in DEFAULTS, false)
+  const dict = Config?.dict ?? {}
+  assert.equal('warmupHistory' in dict, false)
+  assert.equal(DEFAULTS.recentLimit, 200)
+  assert.equal(DEFAULTS.injectRecent, 20)
+  assert.equal(DEFAULTS.warmupStaleMinutes, 10)
+})
+test('归档流水线：待归档批次 → 摘要/人物 → 注入', async () => {
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const tmp = mkdtempSync(join(tmpdir(), 'arch-'))
+  try {
+    const store = new MemoryStore({
+      ctx: {}, root: tmp, spacePrefix: 'napcat-', backend: 'file',
+      recentLimit: 200, injectRecent: 20, injectMaxChars: 6000, log: () => undefined,
+    })
+    for (let i = 0; i < 6; i += 1) await store.appendRecent('group:1', { nick: '顿顿', text: '消息' + i, at: 1000 + i })
+    // 初始水位 0 → 全部待归档
+    const state = await store.archiveState('group:1')
+    assert.equal(state.archivedUpTo, 0)
+    const rows = await store.pendingArchiveRows('group:1', 0, 4)
+    assert.equal(rows.length, 4)
+    assert.equal(rows[0].text, '消息0')
+    // 写批次文件
+    const path = await store.writeArchiveBatch('group:1', rows)
+    assert.ok(path.endsWith('archive-pending.jsonl'))
+    // 摘要 + 人物
+    await store.appendSummary('group:1', { from: 1000, to: 1003, text: '聊了抽卡和拼胶' })
+    await store.savePeople('group:1', { 老灯: { names: ['老灯'], style: '吐槽型', topics: ['抽卡'] } })
+    // 水位推进后不再重复取同一批
+    await store.saveArchiveState('group:1', { archivedUpTo: 1003, lastAt: Date.now() })
+    const rows2 = await store.pendingArchiveRows('group:1', (await store.archiveState('group:1')).archivedUpTo, 4)
+    assert.equal(rows2.length, 2)
+    assert.equal(rows2[0].text, '消息4')
+    // 注入能看到摘要与人物
+    const summaries = await store.readSummaries('group:1', 3)
+    const people = await store.readPeople('group:1')
+    const inj = store.buildInjection({
+      chatKey: 'group:1', recent: [], recallText: '', spaceId: 'x',
+      summaries, people: Object.entries(people).map(([name, card]) => ({ name, style: card.style, topics: card.topics })),
+    })
+    assert.ok(inj.includes('【近期脉络'))
+    assert.ok(inj.includes('聊了抽卡和拼胶'))
+    assert.ok(inj.includes('【本群人物'))
+    assert.ok(inj.includes('老灯'))
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})

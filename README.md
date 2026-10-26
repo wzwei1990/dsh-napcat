@@ -79,7 +79,7 @@ QQ 用户 <──回复──── NapCat <──动作(WS)────┘   �
 - 群 → `get_group_msg_history`
 - 私聊 → `get_friend_msg_history`
 
-判据是「条数够 **且** 够新」：`warmupHistory`（目标条数）、`warmupStaleMinutes`（新鲜度）。预热是**合并**（按时间+昵称+内容去重），绝不会把已攒下的历史覆盖掉 ✗→✓。
+判据是「条数够 **且** 够新」：目标是 `recentLimit`（缓冲容量）、`warmupStaleMinutes`（新鲜度）。预热是**合并**（按时间+昵称+内容去重），绝不会把已攒下的历史覆盖掉 ✗→✓。
 
 > ⚠️ 实现要点：mnemon 的记忆操作**必须在模型本轮 turn 内**执行（插件用 `ctx.tools.execute()` 在轮次外调用会被拒绝）。所以插件只负责注入上下文 + 转投命令，**从不自己调用 mnemon 的 recall**。
 
@@ -343,10 +343,12 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `memoryAutoCapture` | `true` | 模型自动判断并写入设定/黑话/人物/事实（关掉则只响应显式「记住」） |
 | `memorySpaces` | `'` | 手填空间 id（`group:<群号>=<id>`）；留空由模型首次使用时自动创建并登记 |
 | `memorySpacePrefix` | `napcat-` | 自动创建空间时的名字前缀 |
-| `recentLimit` | `200` | 每群保留最近消息条数（缓冲上限，不直接进模型） |
+| `memeNudgeAfter` | `2` | 连续几条回复没带表情就注入提醒一次（0=不提醒） |
+| `archiveEvery` | `50` | 归档节奏：攒够这么多条消息就让模型蒸馏一次（摘要 + 人物卡，0=关闭） |
+| `recentLimit` | `200` | 缓冲容量：保留多少条 = 预热补到多少条（含"最多存多少"与"补多少"两层含义；调小=少存少补） |
 | `injectRecent` | `20` | 每次触发注入最近对话条数（直接影响 token 成本） |
 | `injectMaxChars` | `4000` | 记忆注入总字符上限（超出截断并提示压缩） |
-| `warmupHistory` | `0` | 预热目标条数（0=关闭）；缓冲不足时用历史接口补齐 |
+
 | `warmupImages` | `true` | 预热时也缓存历史消息里的图片（file id 失效则记 `[图片(已过期)]`） |
 | `warmupImageLimit` | `30` | 单次预热最多下载几张历史图片 |
 | `warmupStaleMinutes` | `10` | 缓冲最新一条超过多少分钟视为过期、需要重新预热 |
