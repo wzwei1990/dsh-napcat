@@ -35,3 +35,7 @@ export declare class MemeLibrary {
      */
     randomAny(avoid?: Set<string>, random?: () => number): Promise<MemeHit | undefined>;
 }
+/** 中文 2-gram（去重、只保留含中文/字母的组），用于粗粒度相关度打分。 */
+/** 中文说法 → 图库标签的同义词表（标签多是英文，靠这张表把口语对上）。 */
+export declare const TAG_SYNONYMS: Record<string, string[]>;
+export declare function bigrams(text: string): string[];

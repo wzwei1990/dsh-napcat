@@ -349,3 +349,35 @@ test('预热计数：缓冲已满时仍返回真正新增条数', async () => {
     rmSync(tmp, { recursive: true, force: true })
   }
 })
+
+test('表情匹配：2-gram + 中文同义词都能命中', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { DatabaseSync } = await import('node:sqlite')
+  const { MemeLibrary, bigrams, TAG_SYNONYMS } = await import('../lib/meme.js')
+  const root = mkdtempSync(join(tmpdir(), 'meme-fuzzy-'))
+  try {
+    const pack = join(root, 'pack1')
+    mkdirSync(join(pack, 'daily'), { recursive: true })
+    mkdirSync(join(pack, 'givemoney'), { recursive: true })
+    writeFileSync(join(pack, 'daily', 'ganfan.jpg'), 'x')
+    writeFileSync(join(pack, 'givemoney', 'yaoqian.jpg'), 'x')
+    const db = new DatabaseSync(join(pack, 'index.db'))
+    db.exec('CREATE TABLE memes (path TEXT PRIMARY KEY, tag TEXT, file_name TEXT, caption TEXT, keywords TEXT)')
+    db.prepare('INSERT INTO memes (path, tag, file_name, caption, keywords) VALUES (?,?,?,?,?)').run('daily/ganfan.jpg', 'daily', 'ganfan.jpg', '捧着蓝碗干饭，星星眼吃得很香', '干饭 吃饭')
+    db.prepare('INSERT INTO memes (path, tag, file_name, caption, keywords) VALUES (?,?,?,?,?)').run('givemoney/yaoqian.jpg', 'givemoney', 'yaoqian.jpg', '捧着小钱包亮晶晶期待，求零食钱', '钱 红包')
+    db.close()
+    const lib = new MemeLibrary([root], () => undefined)
+    // 2-gram：「吃饭」能对上 caption 里的「干饭」
+    const viaGram = await lib.search('吃饭', new Set(), 3)
+    assert.ok(viaGram.some(hit => hit.file.endsWith('ganfan.jpg')), '2-gram 应命中 ganfan')
+    // 同义词：口语「给我钱」对上 givemoney 标签
+    const viaSynonym = await lib.search('给我钱', new Set(), 3)
+    assert.ok(viaSynonym.some(hit => hit.file.endsWith('yaoqian.jpg')), '同义词表应命中 yaoqian')
+    assert.ok(bigrams('吃饭饭').length >= 2)
+    assert.ok(TAG_SYNONYMS.givemoney?.includes('钱'))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
