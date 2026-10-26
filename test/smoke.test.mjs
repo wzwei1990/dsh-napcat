@@ -292,9 +292,11 @@ test('原生表情轮换：连续「开心」不会一直是同一个', async ()
   const third = faceFor('开心', new Set([first, second]))
   assert.notEqual(third, first)
   assert.notEqual(third, second)
-  // avoid 覆盖全部同义时回落到主表情
-  const all = new Set(['14', '13', '21', '20'])
-  assert.equal(faceFor('开心', all), '14')
+  // 全都发过时 → 挑最久没用过的（历史数组末尾 = 最旧）
+  const history = ['14', '13', '21', '20']
+  assert.equal(faceFor('开心', history), '20')
+  // 也支持传 Set（旧签名兼容）
+  assert.ok(['14', '13', '21', '20'].includes(faceFor('开心', new Set(history))))
 })
 test('表情避重：同情绪图用尽后返回 undefined，交给全场随机扩池', async () => {
   const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')

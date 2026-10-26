@@ -42,7 +42,13 @@ const RULES: FaceRule[] = [
  * 描述 → QQ 表情 id；匹配不到返回 undefined。
  * avoid 里是最近刚发过的 id：命中就换一个同义备选，避免一直同一个表情。
  */
-export function faceFor(description: string, avoid: Set<string> = new Set()): string | undefined {
+/**
+ * 描述 → QQ 表情 id；匹配不到返回 undefined。
+ * recent 是**最近发过的 id 列表（越靠前越新）**：命中就换同义备选；
+ * 全都发过就挑最久没用的那个（不再死守主表情，避免"永远同一个"）。
+ */
+export function faceFor(description: string, recent: readonly string[] | Set<string> = []): string | undefined {
+  const history = Array.isArray(recent) ? recent : [...recent]
   const text = description.trim()
   if (text === '') return undefined
   // 先精确包含关键词的（越长的关键词越优先，避免「开心」抢了「不开心」）
@@ -55,10 +61,23 @@ export function faceFor(description: string, avoid: Set<string> = new Set()): st
   }
   const rule = best?.rule ?? RULES.find(item => text.includes(item.name))
   if (rule === undefined) return undefined
-  // 轮换：主表情刚发过就换同义备选
-  if (!avoid.has(rule.id)) return rule.id
-  const alt = rule.alts.find(id => !avoid.has(id))
-  return alt ?? rule.id
+  const candidates = [rule.id, ...rule.alts]
+  // 优先没发过的
+  for (const id of candidates) {
+    if (!history.includes(id)) return id
+  }
+  // 都发过了：挑最久没用过的（history 越靠后越旧）
+  let pick = candidates[0] as string
+  let worst = -1
+  for (const id of candidates) {
+    const index = history.indexOf(id)
+    const age = index === -1 ? Number.MAX_SAFE_INTEGER : index
+    if (age > worst) {
+      worst = age
+      pick = id
+    }
+  }
+  return pick
 }
 
 /** 词表（供文档/调试展示）。 */

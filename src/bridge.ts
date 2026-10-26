@@ -1340,7 +1340,7 @@ export class Bridge {
         }
       }
       if (!resolved && this.opts.config.faceFallback) {
-        const faceId = faceFor(query, new Set(this.recentFaceIds))
+        const faceId = faceFor(query, this.recentFaceIds)
         if (faceId !== undefined) {
           segments.push({ kind: 'face', id: faceId })
           resolved = true
