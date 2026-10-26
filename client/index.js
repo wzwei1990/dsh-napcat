@@ -51,6 +51,8 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'memeEnabled', label: '把 [表情:描述] 解析成 dsh-meme 图库里的图发送', kind: 'boolean' },
         { key: 'faceFallback', label: '图库没图时用 QQ 原生小黄脸兜底', kind: 'boolean' },
         { key: 'memeDirs', label: '表情库目录（留空=自动扫描 DSH_HOME 下 dsh-meme）', kind: 'string' },
+        { key: 'memeRecentLimit', label: '表情避重窗口（-1=自动按图库大小，0=不避重）', kind: 'number' },
+        { key: 'memeLooseFallback', label: '匹配不到时也随机发一张图（默认关，避免不贴题）', kind: 'boolean' },
         { key: 'outboundImageMaxBytes', label: '单张待发送图片上限（字节，默认 8MB）', kind: 'number' },
         { key: 'reconnectMaxAttempts', label: '重连上限（0=无限）', kind: 'number' },
         { key: 'workspacePath', label: '会话工作区路径（留空=宿主 cwd）', kind: 'text' },

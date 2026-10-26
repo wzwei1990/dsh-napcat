@@ -41,6 +41,8 @@ export interface Config {
   memeEnabled: boolean
   faceFallback: boolean
   memeDirs: string
+  memeRecentLimit: number
+  memeLooseFallback: boolean
   outboundImageMaxBytes: number
   /** forward 模式连续失败多少次后放弃重连（0=无限）。 */
   reconnectMaxAttempts: number
@@ -120,6 +122,8 @@ export const Config: Z<Config> = z.object({
   dryRun: z.boolean().default(false).description('只读模式：不向 QQ 发送任何消息（本地测试用，避免和线上实例重复发言）').volatile(),
   faceFallback: z.boolean().default(true).description('图库没有对应图时，把 [表情:描述] 换成 QQ 原生小黄脸').volatile(),
   memeEnabled: z.boolean().default(true).description('允许把 [表情:描述] 解析成 dsh-meme 图库里的图并发送').volatile(),
+  memeLooseFallback: z.boolean().default(false).description('描述和情绪都匹配不上时，是否仍随机发一张图（默认关：宁可不发也不发不贴题的）').volatile(),
+  memeRecentLimit: z.number().default(-1).description('表情避重窗口：-1=按图库大小自动（约一半），0=不避重，正数=固定张数').volatile(),
   memeDirs: z.string().default('').description('表情库目录（分号/逗号分隔）；留空=自动扫描 DSH_HOME 下 dsh-meme 的 memes 目录').volatile(),
   outboundImageMaxBytes: z.natural().default(8388608).description('单张待发送图片的大小上限（字节，默认 8MB）').volatile(),
   sendIntervalMs: z.number().default(500)
@@ -189,6 +193,8 @@ export const DEFAULTS: Config = {
   memeEnabled: true,
   faceFallback: true,
   memeDirs: '',
+  memeRecentLimit: -1,
+  memeLooseFallback: false,
   outboundImageMaxBytes: 8388608,
   reconnectMaxAttempts: 0,
   workspacePath: '',

@@ -97,6 +97,11 @@ export class MemeLibrary {
     return rows
   }
 
+  /** 图库总张数（自适应避重窗口用）。 */
+  async size(): Promise<number> {
+    return (await this.allRows()).length
+  }
+
   private async allRows(): Promise<Row[]> {
     const out: Row[] = []
     for (const dir of this.dirs) out.push(...await this.rowsOf(dir))
@@ -132,14 +137,25 @@ export class MemeLibrary {
     return scored.slice(0, limit).map(item => item.hit)
   }
 
-  /** 同情绪里随机抽一张（描述匹配不上时的兜底），尽量避开最近发过的。 */
+  /** 同情绪里随机抽一张（描述匹配不上时的兜底），只从没发过的里面挑；该情绪用光就返回 undefined。 */
   async randomInTag(tag: string, avoid: Set<string> = new Set(), random: () => number = Math.random): Promise<MemeHit | undefined> {
     const rows = await this.allRows()
     const pool = rows.filter(row => row.tag === tag && !avoid.has(row.path))
-    const fallback = rows.filter(row => row.tag === tag)
-    const use = pool.length > 0 ? pool : fallback
-    if (use.length === 0) return undefined
-    const pick = use[Math.floor(random() * use.length) % use.length]
+    if (pool.length === 0) return undefined
+    const pick = pool[Math.floor(random() * pool.length) % pool.length]
+    if (pick === undefined) return undefined
+    return { file: pick.path, caption: pick.caption, tag: pick.tag, pack: '' }
+  }
+
+  /**
+   * 全场随机（不限情绪），只避开最近发过的 —— 同情绪图用光时扩池，
+   * 让轮换范围从「3 张开心」扩到「整个图库」。
+   */
+  async randomAny(avoid: Set<string> = new Set(), random: () => number = Math.random): Promise<MemeHit | undefined> {
+    const rows = await this.allRows()
+    const pool = rows.filter(row => !avoid.has(row.path))
+    if (pool.length === 0) return undefined
+    const pick = pool[Math.floor(random() * pool.length) % pool.length]
     if (pick === undefined) return undefined
     return { file: pick.path, caption: pick.caption, tag: pick.tag, pack: '' }
   }

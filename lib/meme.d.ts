@@ -18,6 +18,8 @@ export declare class MemeLibrary {
     constructor(dirs: string[], log?: (level: string, message: string) => void);
     /** 读取一个图库根目录下所有包的 memes 行。 */
     private rowsOf;
+    /** 图库总张数（自适应避重窗口用）。 */
+    size(): Promise<number>;
     private allRows;
     /**
      * 按描述/关键词找图。
@@ -25,6 +27,11 @@ export declare class MemeLibrary {
      * @param avoid 最近发过的文件路径（用于避免连续重复同一张）
      */
     search(query: string, avoid?: Set<string>, limit?: number): Promise<MemeHit[]>;
-    /** 同情绪里随机抽一张（描述匹配不上时的兜底），尽量避开最近发过的。 */
+    /** 同情绪里随机抽一张（描述匹配不上时的兜底），只从没发过的里面挑；该情绪用光就返回 undefined。 */
     randomInTag(tag: string, avoid?: Set<string>, random?: () => number): Promise<MemeHit | undefined>;
+    /**
+     * 全场随机（不限情绪），只避开最近发过的 —— 同情绪图用光时扩池，
+     * 让轮换范围从「3 张开心」扩到「整个图库」。
+     */
+    randomAny(avoid?: Set<string>, random?: () => number): Promise<MemeHit | undefined>;
 }

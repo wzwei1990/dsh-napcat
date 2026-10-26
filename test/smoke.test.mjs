@@ -283,3 +283,46 @@ test('出站混排：小黄脸插在文字中间、分段不拆表情', async ()
     assert.ok(len <= 2, '段内文字长度应 <= 2，实际 ' + len)
   }
 })
+test('原生表情轮换：连续「开心」不会一直是同一个', async () => {
+  const { faceFor } = await import('../lib/faces.js')
+  const first = faceFor('开心')
+  assert.equal(first, '14')
+  const second = faceFor('开心', new Set([first]))
+  assert.notEqual(second, first)
+  const third = faceFor('开心', new Set([first, second]))
+  assert.notEqual(third, first)
+  assert.notEqual(third, second)
+  // avoid 覆盖全部同义时回落到主表情
+  const all = new Set(['14', '13', '21', '20'])
+  assert.equal(faceFor('开心', all), '14')
+})
+test('表情避重：同情绪图用尽后返回 undefined，交给全场随机扩池', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const root = mkdtempSync(join(tmpdir(), 'meme-avoid-'))
+  try {
+    const pack = join(root, 'pack1')
+    mkdirSync(join(pack, 'happy'), { recursive: true })
+    writeFileSync(join(pack, 'happy', 'a.jpg'), 'x')
+    writeFileSync(join(pack, 'happy', 'b.jpg'), 'x')
+    // 造一个最小 index.db：用 node:sqlite
+    const { DatabaseSync } = await import('node:sqlite')
+    const db = new DatabaseSync(join(pack, 'index.db'))
+    db.exec('CREATE TABLE memes (path TEXT PRIMARY KEY, tag TEXT, file_name TEXT, caption TEXT, keywords TEXT)')
+    db.prepare('INSERT INTO memes (path, tag, file_name, caption, keywords) VALUES (?,?,?,?,?)').run('happy/a.jpg', 'happy', 'a.jpg', '开心a', 'a')
+    db.prepare('INSERT INTO memes (path, tag, file_name, caption, keywords) VALUES (?,?,?,?,?)').run('happy/b.jpg', 'happy', 'b.jpg', '开心b', 'b')
+    db.close()
+    const { MemeLibrary } = await import('../lib/meme.js')
+    const lib = new MemeLibrary([root], () => undefined)
+    const all = await lib.search('开心', new Set(), 5)
+    assert.equal(all.length, 2)
+    assert.equal(await lib.size(), 2)
+    const avoid = new Set(all.map(hit => hit.file))
+    assert.equal(await lib.randomInTag('happy', avoid), undefined)
+    // 全场随机在还有没发过的图时仍可选中
+    assert.ok(await lib.randomAny(new Set()) !== undefined)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

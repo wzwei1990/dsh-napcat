@@ -38,6 +38,8 @@ export interface Config {
     memeEnabled: boolean;
     faceFallback: boolean;
     memeDirs: string;
+    memeRecentLimit: number;
+    memeLooseFallback: boolean;
     outboundImageMaxBytes: number;
     /** forward 模式连续失败多少次后放弃重连（0=无限）。 */
     reconnectMaxAttempts: number;

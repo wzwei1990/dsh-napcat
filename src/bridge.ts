@@ -236,6 +236,8 @@ export class Bridge {
   private readonly mutedUntil = new Map<string, number>()
   /** 表情库（懒加载）。 */
   private memeLibrary: MemeLibrary | undefined
+  /** 最近发过的原生表情 id（避免同一句描述永远同一个表情）。 */
+  private readonly recentFaceIds: string[] = []
   /** 最近发过的表情文件（避免连续重复同一张）。 */
   private readonly recentMemeFiles: string[] = []
   /** 机器人自己的 QQ（配置没填时用 get_login_info 取一次后缓存）。 */
@@ -1338,7 +1340,7 @@ export class Bridge {
         }
       }
       if (!resolved && this.opts.config.faceFallback) {
-        const faceId = faceFor(query)
+        const faceId = faceFor(query, new Set(this.recentFaceIds))
         if (faceId !== undefined) {
           segments.push({ kind: 'face', id: faceId })
           resolved = true
@@ -1362,33 +1364,65 @@ export class Bridge {
     return { segments: trimParts(cleaned), images }
   }
 
+  /**
+   * 计算"避重集合"：默认按图库大小自适应（约一半），图库变大窗口自动变宽，
+   * 不用手动调；`memeRecentLimit` 设正数则固定，设 0 则不避重。
+   */
+  private async memeAvoidSet(): Promise<Set<string>> {
+    const configured = Math.floor(this.opts.config.memeRecentLimit)
+    if (configured === 0) return new Set()
+    let window = configured
+    if (configured < 0) {
+      const total = await this.memeLib().size()
+      // 一半左右最舒服：太少会重复，太多会导致可选图变少反而更差
+      window = Math.min(50, Math.max(1, Math.floor(total / 2)))
+    }
+    return new Set(this.recentMemeFiles.slice(0, Math.max(0, window)))
+  }
+
   /** 按描述从 dsh-meme 图库找图；同一张最近发过就换一张同情绪的，避免来回重复。 */
   private async resolveMeme(query: string): Promise<string | undefined> {
     const library = this.memeLib()
-    const avoid = new Set(this.recentMemeFiles)
-    const hits = await library.search(query, avoid, 4)
+    const avoid = await this.memeAvoidSet()
+    const hits = await library.search(query, avoid, 8)
     // 优先没发过的那张；都发过就落到下面按情绪随机换一张，避免来回重复同一张
     const fresh = hits.find(hit => !avoid.has(hit.file))
     if (fresh !== undefined) {
       this.noteMemeSent(fresh.file)
       return fresh.file
     }
-    // 描述匹配不上：按关键词猜情绪，再在同情绪里随机抽
-    const guess = query.match(/开心|笑|好耶|满意|可爱|喜欢|卖萌/) ? 'happy'
-      : query.match(/生气|怒|气死|讨厌/) ? 'angry'
-        : query.match(/难过|哭|委屈|求饶|无语/) ? 'sad'
-          : query.match(/害羞|脸红|不好意思/) ? 'shy'
-            : query.match(/困惑|疑问|惊讶|震惊|懵/) ? 'confused'
-              : 'daily'
-    const fallback = await library.randomInTag(guess, avoid)
-    if (fallback === undefined) return undefined
-    this.noteMemeSent(fallback.file)
-    return fallback.file
+    // 描述匹配不上：退回"按情绪挑"（只认明确提到的情绪词，不再默认 daily）
+    const guess = query.match(/开心|笑|好耶|满意|可爱|喜欢|卖萌|赞|棒/) ? 'happy'
+      : query.match(/生气|怒|气死|讨厌|烦/) ? 'angry'
+        : query.match(/难过|伤心|哭|委屈|求饶|唉/) ? 'sad'
+          : query.match(/无语|汗|尴尬|无奈/) ? 'sigh'
+            : query.match(/害羞|脸红|不好意思|羞/) ? 'shy'
+              : query.match(/困惑|疑问|惊讶|震惊|懵/) ? 'confused'
+                : query.match(/睡|困|晚安|累/) ? 'sleep'
+                  : undefined
+    if (guess !== undefined) {
+      const fallback = await library.randomInTag(guess, avoid)
+      if (fallback !== undefined) {
+        this.noteMemeSent(fallback.file)
+        return fallback.file
+      }
+    }
+    // 情绪也匹配不上（或该情绪用光）：默认**不发不贴题的图**，交给上层退化成小黄脸/纯文字。
+    // 想要"没匹配也随便发一张"就把 memeLooseFallback 打开。
+    if (this.opts.config.memeLooseFallback) {
+      const anywhere = await library.randomAny(avoid)
+      if (anywhere !== undefined) {
+        this.noteMemeSent(anywhere.file)
+        return anywhere.file
+      }
+    }
+    return undefined
   }
 
   private noteMemeSent(file: string): void {
+    // 只负责记录（最多存 50 条），实际用多少由 memeAvoidSet() 按图库大小自动决定
     this.recentMemeFiles.unshift(file)
-    while (this.recentMemeFiles.length > 12) this.recentMemeFiles.pop()
+    while (this.recentMemeFiles.length > 50) this.recentMemeFiles.pop()
   }
 
   /** 懒加载表情库（优先配置目录，否则扫 DSH_HOME 下各 profile 里的 dsh-meme）。 */

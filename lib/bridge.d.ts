@@ -62,6 +62,8 @@ export declare class Bridge {
     private readonly mutedUntil;
     /** 表情库（懒加载）。 */
     private memeLibrary;
+    /** 最近发过的原生表情 id（避免同一句描述永远同一个表情）。 */
+    private readonly recentFaceIds;
     /** 最近发过的表情文件（避免连续重复同一张）。 */
     private readonly recentMemeFiles;
     /** 机器人自己的 QQ（配置没填时用 get_login_info 取一次后缓存）。 */
@@ -136,6 +138,11 @@ export declare class Bridge {
      *   [表情:<描述>]                   → 图库有图就当图片发；没图就换成 QQ 原生表情，**就地嵌进文字流**
      */
     private planOutbound;
+    /**
+     * 计算"避重集合"：默认按图库大小自适应（约一半），图库变大窗口自动变宽，
+     * 不用手动调；`memeRecentLimit` 设正数则固定，设 0 则不避重。
+     */
+    private memeAvoidSet;
     /** 按描述从 dsh-meme 图库找图；同一张最近发过就换一张同情绪的，避免来回重复。 */
     private resolveMeme;
     private noteMemeSent;
