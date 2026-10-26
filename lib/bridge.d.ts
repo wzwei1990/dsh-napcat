@@ -145,6 +145,8 @@ export declare class Bridge {
     private memeAvoidSet;
     /** 按描述从 dsh-meme 图库找图；同一张最近发过就换一张同情绪的，避免来回重复。 */
     private resolveMeme;
+    /** 记录刚发过的原生表情（用于轮换，最多 8 个）。 */
+    private noteFaceSent;
     private noteMemeSent;
     /** 懒加载表情库（优先配置目录，否则扫 DSH_HOME 下各 profile 里的 dsh-meme）。 */
     private memeLib;

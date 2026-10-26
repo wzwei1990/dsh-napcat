@@ -328,3 +328,24 @@ test('表情避重：同情绪图用尽后返回 undefined，交给全场随机�
     rmSync(root, { recursive: true, force: true })
   }
 })
+test('预热计数：缓冲已满时仍返回真正新增条数', async () => {
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const tmp = mkdtempSync(join(tmpdir(), 'cnt-'))
+  try {
+    const store = new MemoryStore({
+      ctx: {}, root: tmp, spacePrefix: 'napcat-', backend: 'file',
+      recentLimit: 5, injectRecent: 5, injectMaxChars: 4000, log: () => undefined,
+    })
+    for (let i = 0; i < 5; i += 1) await store.appendRecent('group:1', { nick: 'a', text: 't' + i, at: 1000 + i })
+    const added = await store.seedRecent('group:1', [
+      { nick: 'a', text: 'n1', at: 2000 },
+      { nick: 'a', text: 'n2', at: 2001 },
+      { nick: 'a', text: 'n3', at: 2002 },
+    ])
+    assert.equal(added, 3)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})

@@ -304,11 +304,15 @@ export class MemoryStore {
       // 文件还不存在
     }
     const before = rows.length
+    let added = 0
     for (const row of incoming) {
       // 同内容 + 5 秒内 → 合并
       const index = rows.findIndex(existing => normText(existing.text) === normText(row.text) && Math.abs(existing.t - row.t) <= 5000)
       if (index >= 0) rows[index] = better(rows[index] as Row, row)
-      else rows.push(row)
+      else {
+        rows.push(row)
+        added += 1
+      }
     }
     rows.sort((left, right) => left.t - right.t)
     // 自检压缩：把历史遗留的"同内容 + 5 秒内"重复行也合并掉（清洗旧数据用）
@@ -326,7 +330,8 @@ export class MemoryStore {
     const tmp = path + '.tmp'
     await writeFile(tmp, payload, 'utf8')
     await rename(tmp, path)
-    return Math.max(0, kept.length - before)
+    // 返回"真正新增的条数"（原来用 kept.length - before，缓冲满了永远是 0，日志误导）
+    return added
   }
 
   /**
@@ -468,12 +473,12 @@ export class MemoryStore {
       blocks.push('【本群长期记忆（相关片段）】\n' + parts.recallText)
     }
     // 出站可发送的媒体：生成/找到的图要主动带上，否则用户要再催一次
-    blocks.push('【发图/发表情】想发表情包时**先用表情工具搜候选**（如 send_meme / meme_list），把候选里的描述**原样**写进 [表情:描述]——我按这段描述在图库里找图，描述对不上就只能退化成小黄脸。'
-      + '这轮如果用工具生成了图片、或挑到了图，请把文件路径用 [图片:绝对路径] 写进回复正文'
-      + '（一张一行），QQ 侧会把它作为真实图片消息发出去；想发表情就写 [表情:描述]（描述抄候选原文）。'
-      + '不要只说「图已生成」或只给文件名——没带 [图片:路径] 就等于没发出去。'
-      + '另外：**不要直接在正文里打 emoji 字符**（😊😌😂 这种），要表情就写 [表情:描述]，'
-      + '这样才会走表情库/小黄脸轮换；直接打字符的话每次都是同一个，也不会去图库找图。')
+    blocks.push('【发图/发表情】表情只有两种合法写法，别直接用 emoji 字符（😊😌😂 这种每次都是同一个、也不进图库）：\n'
+      + '  ① 只想表达情绪 → 直接写 [表情:开心] / [表情:无语] / [表情:生气] 这类**简单情绪词**，插件会换成会轮换的小黄脸；\n'
+      + '  ② 想发**图库表情包** → 先用表情工具搜候选（send_meme / meme_list），把候选描述**原样**写进 [表情:描述]。\n'
+      + '匹配不到也没关系，插件会自动降级（图库图 → 小黄脸 → 通用表情），**不会白写、也不会发错图**，所以拿不准时放心写。\n'
+      + '这轮如果用工具生成了图片，请把文件路径用 [图片:绝对路径] 写进回复正文（一张一行），QQ 侧会作为真实图片消息发出去；'
+      + '不要只说「图已生成」或只给文件名——没带 [图片:路径] 就等于没发出去。')
     // 群聊礼仪放最后：预算紧张时优先牺牲它，别挤掉 @ 段和长期记忆
     if (parts.chatKey.startsWith('group:')) {
       blocks.push('【这是群聊，不是一对一】群里有多个人：认人，必要时用昵称点名（不必每句）；谁问的就回谁；'

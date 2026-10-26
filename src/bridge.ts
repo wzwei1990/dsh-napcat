@@ -1343,10 +1343,19 @@ export class Bridge {
         const faceId = faceFor(query, this.recentFaceIds)
         if (faceId !== undefined) {
           segments.push({ kind: 'face', id: faceId })
+          this.noteFaceSent(faceId)
           resolved = true
         }
       }
-      if (!resolved && query !== '') this.opts.log('debug', '表情无法解析，已忽略: ' + query)
+      if (!resolved && this.opts.config.faceFallback && query !== '') {
+        // 连关键词都对不上：给一个轮换的"通用"表情，别让用户的 [表情:…] 白写
+        const generic = faceFor('开心', this.recentFaceIds) ?? '14'
+        segments.push({ kind: 'face', id: generic })
+        this.noteFaceSent(generic)
+        resolved = true
+        this.opts.log('info', '表情描述匹配不到，改用通用表情 face ' + generic + ': ' + query)
+      }
+      if (!resolved && query !== '') this.opts.log('info', '表情已丢弃（图库/表情都不可用）: ' + query)
     }
     const tail = body.slice(last)
     if (tail !== '') segments.push({ kind: 'text', text: tail })
@@ -1417,6 +1426,12 @@ export class Bridge {
       }
     }
     return undefined
+  }
+
+  /** 记录刚发过的原生表情（用于轮换，最多 8 个）。 */
+  private noteFaceSent(faceId: string): void {
+    this.recentFaceIds.unshift(faceId)
+    while (this.recentFaceIds.length > 8) this.recentFaceIds.pop()
   }
 
   private noteMemeSent(file: string): void {
