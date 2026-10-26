@@ -233,3 +233,53 @@ test('预热合并不会丢历史（seedRecent 合并语义）', async () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+test('表情库：未安装 dsh-meme 时安静降级（不抛错、不发图）', async () => {
+  const { MemeLibrary } = await import('../lib/meme.js')
+  const lib = new MemeLibrary(['/definitely/not/here'], () => undefined)
+  assert.deepEqual(await lib.search('干饭'), [])
+  assert.equal(await lib.randomInTag('happy'), undefined)
+})
+
+test('表情库：坏目录/空描述也不炸', async () => {
+  const { MemeLibrary } = await import('../lib/meme.js')
+  const lib = new MemeLibrary([], () => undefined)
+  assert.deepEqual(await lib.search(''), [])
+  assert.deepEqual(await lib.search('   '), [])
+})
+test('原生表情兜底：描述 → QQ face id', async () => {
+  const { faceFor, faceCatalog } = await import('../lib/faces.js')
+  assert.equal(faceFor('开心'), '14')
+  assert.equal(faceFor('笑死我了'), '13')
+  assert.equal(faceFor('生气'), '11')
+  assert.equal(faceFor('无语'), '27')
+  assert.equal(faceFor('干饭'), '24')
+  assert.equal(faceFor('完全对不上的一句话xyz'), undefined)
+  assert.equal(faceFor(''), undefined)
+  assert.ok(faceCatalog().length >= 15)
+})
+test('出站混排：小黄脸插在文字中间、分段不拆表情', async () => {
+  const { splitSegments, trimParts } = await import('../lib/bridge.js')
+  const parts = trimParts([
+    { kind: 'text', text: '  好耶' },
+    { kind: 'face', id: '14' },
+    { kind: 'text', text: '那我去睡了' },
+    { kind: 'face', id: '8' },
+    { kind: 'text', text: '  ' },
+  ])
+  // 首尾空白被去掉，表情保留（共 4 段：文字、表情、文字、表情）
+  assert.equal(parts.length, 4)
+  assert.equal(parts[0].kind, 'text')
+  assert.equal(parts[0].text, '好耶')
+  assert.deepEqual(parts[1], { kind: 'face', id: '14' })
+  assert.deepEqual(parts[3], { kind: 'face', id: '8' })
+  // 分段：maxChars 很小时只切文字，表情跟着原位置
+  const groups = splitSegments(parts, 2)
+  assert.ok(groups.length >= 2)
+  const flat = groups.flat()
+  assert.equal(flat.filter(p => p.kind === 'face').length, 2)
+  // 每段文字长度都不超上限
+  for (const group of groups) {
+    const len = group.filter(p => p.kind === 'text').reduce((acc, p) => acc + p.text.length, 0)
+    assert.ok(len <= 2, '段内文字长度应 <= 2，实际 ' + len)
+  }
+})

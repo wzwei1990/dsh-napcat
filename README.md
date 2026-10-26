@@ -147,6 +147,40 @@ imageCacheRetentionDays: 7      # 超期目录自动清理
 
 > 设计参考：泊松触达（revive-companion）、概率+阈值（koishi-plugin-imx）、冷却与群隔离（chat-learning）、QQ 官方主动消息频控（每群 20 qpm / 1000 条/天，我们保守到每小时 3 条）。
 
+### 出站图片与表情（QQ 侧真的发出去）
+
+模型回复里可以带三种标记，插件会转成**真实图片消息**（而不是让用户看到文字）：
+
+| 写法 | 行为 |
+|---|---|
+| `[图片:<路径>]` | 发送该文件；相对路径按会话工作目录解析 |
+| `![说明](<路径>)` | 同上（markdown 图片） |
+| `[表情:<描述>]` | 到 **dsh-meme 图库**里按描述/关键词找图后发送 |
+
+- 生成图片后**不用用户再催**：提示词里已经要求「生成/挑到图就把路径写进回复」，插件负责发。
+- **发送方式**：小黄脸（原生表情）**就地嵌在文字里**同一条消息发出；图片/表情包**单独一条**（每张一条）。多条之间由 `sendIntervalMs` 控制间隔。`n- 表情会自动避开最近 12 张，减少「每次都是同一张」；描述匹配不上时按情绪随机换一张。
+- **没装 dsh-meme 也有表情**：`[表情:…]` 按关键词换成 **QQ 原生小黄脸**（开心→😊、生气→😠、无语→😓、干饭→🍚…共 20 个词），不下载任何图片、不依赖插件；`[图片:路径]` 与 markdown 图片同样不依赖表情插件。
+- 关掉：`memeEnabled: false`（表情不再解析），或 `memeDirs` 指定自己的图库目录。
+
+### 只读模式（本地 + 云端同时跑）
+
+两个实例连同一个 QQ 会**双发消息**（每个实例都会回复同一句）。稳妥做法：
+
+```yaml
+dryRun: true     # 本地实例：只处理、只记日志，不向 QQ 发送任何消息
+```
+
+日志会显示 `[dryRun] 本应发送到 group:xxx: …`，方便本地调提示词而不打扰线上。
+
+### 群聊感（不像 1v1）
+
+群里注入一条「这是群聊，不是一对一」的礼仪：认人、必要时用昵称点名、谁问的回谁、**定时提醒必须带发起人昵称和事由**（不再发无主语的「提醒：…」）。这条放在注入块末尾，预算紧张时优先牺牲它，不会挤掉 @ 段和长期记忆。
+
+### Linux 部署注意
+
+- `workspacePath` 用**正斜杠**（如 `/workspace`）；路径归一化已按平台处理，Windows 上仍可用反斜杠。
+- 记忆/图片目录都由 `workspacePath` 派生：Linux 下就是 `/workspace/memory`、`/workspace/napcat/...`。
+
 ### 被禁言了会自动停发
 
 发送失败时会探测一次禁言状态（`get_group_member_info` 的 `shut_up_timestamp`，外加 `get_group_info` 的 `group_all_shut` 全员禁言）：
@@ -269,6 +303,11 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `requireMention` | `true` | 群聊是否必须 @；关键字/回复命中则不需要 |
 | `ignoreSelf` | `true` | 忽略机器人自己发的消息 |
 | `replyAsQuote` | `false` | 回复时是否引用原消息 |
+| `dryRun` | `false` | 只读模式：不向 QQ 发送任何消息（本地测试用，避免与线上双发） |
+| `memeEnabled` | `true` | 把 `[表情:描述]` 解析成 dsh-meme 图库里的图并发送 |
+| `memeDirs` | `'` | 表情库目录（留空=自动扫描 DSH_HOME 下 dsh-meme） |
+| `faceFallback` | `true` | 图库没图时把 `[表情:描述]` 换成 QQ 原生小黄脸 |
+| `outboundImageMaxBytes` | `8388608` | 单张待发送图片大小上限（字节） |
 | `sendIntervalMs` | `500` | 分段消息之间的间隔（毫秒），避免 QQ 风控连发；0=不限 |
 | `splitMaxChars` | `1200` | 长消息分段长度 |
 | `reconnectMaxAttempts` | `10` | 重连次数（2s→60s 退避） |

@@ -60,6 +60,10 @@ export declare class Bridge {
     private readonly pendingProactive;
     /** 群禁言到什么时候（毫秒）：期间不发消息，也跳过主动发言。 */
     private readonly mutedUntil;
+    /** 表情库（懒加载）。 */
+    private memeLibrary;
+    /** 最近发过的表情文件（避免连续重复同一张）。 */
+    private readonly recentMemeFiles;
     /** 机器人自己的 QQ（配置没填时用 get_login_info 取一次后缓存）。 */
     private selfQqCache;
     /** 上次「被硬门挡住」的提示时间（防刷屏，每群 10 分钟一条）。 */
@@ -124,6 +128,36 @@ export declare class Bridge {
     private probeMute;
     /** 机器人自己的 QQ：配置优先，未配置时用 get_login_info 取一次并缓存。 */
     private selfQq;
-    /** 按 splitMaxChars 分段发送（第一段可带引用）。 */
+    /** 出站发送：小黄脸嵌在文字里（同一条消息），图片/表情包单独发。 */
     private sendText;
+    /**
+     * 出站预处理：把回复里的标记解析成「文字段 + 原生表情段」和「待发图片」。
+     *   [图片:<路径>] / ![alt](<路径>)  → 收集为图片，解析后单独发
+     *   [表情:<描述>]                   → 图库有图就当图片发；没图就换成 QQ 原生表情，**就地嵌进文字流**
+     */
+    private planOutbound;
+    /** 按描述从 dsh-meme 图库找图；同一张最近发过就换一张同情绪的，避免来回重复。 */
+    private resolveMeme;
+    private noteMemeSent;
+    /** 懒加载表情库（优先配置目录，否则扫 DSH_HOME 下各 profile 里的 dsh-meme）。 */
+    private memeLib;
+    /** 把本地图片文件作为图片消息发出去（带重试/禁言处理；dryRun 时只记日志）。 */
+    private sendImagePath;
+    /** 统一的发送入口：重试 + 禁言探测；dryRun 时只记日志并返回成功。 */
+    private sendSegments;
 }
+/** 出站消息片段：文字或 QQ 原生表情（就地混排）。 */
+export type OutPart = {
+    kind: 'text';
+    text: string;
+} | {
+    kind: 'face';
+    id: string;
+};
+/** 去掉首尾纯空白文字段（表情段保留）。 */
+export declare function trimParts(parts: OutPart[]): OutPart[];
+/**
+ * 把混排片段按字数上限切成多条消息（表情不占字数、跟着当前条走）。
+ * maxChars <= 0 表示不分段。
+ */
+export declare function splitSegments(parts: OutPart[], maxChars: number): OutPart[][];

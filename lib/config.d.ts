@@ -34,6 +34,11 @@ export interface Config {
     /** 单条 QQ 消息的最大字数，超出按段落/句子分段发送；0=不分段。 */
     splitMaxChars: number;
     sendIntervalMs: number;
+    dryRun: boolean;
+    memeEnabled: boolean;
+    faceFallback: boolean;
+    memeDirs: string;
+    outboundImageMaxBytes: number;
     /** forward 模式连续失败多少次后放弃重连（0=无限）。 */
     reconnectMaxAttempts: number;
     /** QQ 会话挂载的工作区；留空=宿主进程 cwd。 */

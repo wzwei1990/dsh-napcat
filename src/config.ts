@@ -37,6 +37,11 @@ export interface Config {
   /** 单条 QQ 消息的最大字数，超出按段落/句子分段发送；0=不分段。 */
   splitMaxChars: number
   sendIntervalMs: number
+  dryRun: boolean
+  memeEnabled: boolean
+  faceFallback: boolean
+  memeDirs: string
+  outboundImageMaxBytes: number
   /** forward 模式连续失败多少次后放弃重连（0=无限）。 */
   reconnectMaxAttempts: number
   /** QQ 会话挂载的工作区；留空=宿主进程 cwd。 */
@@ -112,6 +117,11 @@ export const Config: Z<Config> = z.object({
     .description('回复时引用原消息（QQ 里显示为"回复"）').volatile(),
   splitMaxChars: z.number().default(1200)
     .description('单条 QQ 消息最大字数，超出自动分段；0=不分段').volatile(),
+  dryRun: z.boolean().default(false).description('只读模式：不向 QQ 发送任何消息（本地测试用，避免和线上实例重复发言）').volatile(),
+  faceFallback: z.boolean().default(true).description('图库没有对应图时，把 [表情:描述] 换成 QQ 原生小黄脸').volatile(),
+  memeEnabled: z.boolean().default(true).description('允许把 [表情:描述] 解析成 dsh-meme 图库里的图并发送').volatile(),
+  memeDirs: z.string().default('').description('表情库目录（分号/逗号分隔）；留空=自动扫描 DSH_HOME 下 dsh-meme 的 memes 目录').volatile(),
+  outboundImageMaxBytes: z.natural().default(8388608).description('单张待发送图片的大小上限（字节，默认 8MB）').volatile(),
   sendIntervalMs: z.number().default(500)
     .description('分段消息之间的间隔（毫秒），避免 QQ 风控连发；0=不限').volatile(),
   reconnectMaxAttempts: z.number().default(0)
@@ -175,6 +185,11 @@ export const DEFAULTS: Config = {
   replyAsQuote: false,
   splitMaxChars: 1200,
   sendIntervalMs: 500,
+  dryRun: false,
+  memeEnabled: true,
+  faceFallback: true,
+  memeDirs: '',
+  outboundImageMaxBytes: 8388608,
   reconnectMaxAttempts: 0,
   workspacePath: '',
   perChatWorkspace: true,

@@ -427,6 +427,7 @@ export class MemoryStore {
           + '正常情况下不必每张都看，只有话题确实需要（在聊图/表情包/截图里的内容）时才读，避免拖慢回复。')
       }
     }
+
     if (this.opts.backend === 'mnemon') {
       if (parts.spaceId !== undefined && parts.spaceId !== '') {
         blocks.push('【本群长期记忆（mnemon）】空间 id = ' + parts.spaceId + '\n' +
@@ -465,6 +466,15 @@ export class MemoryStore {
     }
     if (parts.recallText !== undefined && parts.recallText !== '') {
       blocks.push('【本群长期记忆（相关片段）】\n' + parts.recallText)
+    }
+    // 出站可发送的媒体：生成/找到的图要主动带上，否则用户要再催一次
+    blocks.push('【发图/发表情】这轮如果用工具生成了图片、或从表情库挑到了图，请把文件路径用 [图片:绝对路径] 写进回复正文'
+      + '（一张一行），QQ 侧会把它作为真实图片消息发出去；想发表情就写 [表情:描述]（描述抄候选原文）。'
+      + '不要只说「图已生成」或只给文件名——没带 [图片:路径] 就等于没发出去。')
+    // 群聊礼仪放最后：预算紧张时优先牺牲它，别挤掉 @ 段和长期记忆
+    if (parts.chatKey.startsWith('group:')) {
+      blocks.push('【这是群聊，不是一对一】群里有多个人：认人，必要时用昵称点名（不必每句）；谁问的就回谁；'
+        + '定时提醒/到点通知必须带发起人昵称和事由；语气像群里一员，别像客服。')
     }
     let text = blocks.join('\n\n')
     if (text.length > this.opts.injectMaxChars) {
