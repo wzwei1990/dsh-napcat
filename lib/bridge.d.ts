@@ -62,6 +62,12 @@ export declare class Bridge {
     private readonly mutedUntil;
     /** 表情库（懒加载）。 */
     private memeLibrary;
+    /** 归档定时器与运行时状态（独立静默会话，输出不进 QQ）。 */
+    private archiveTimer;
+    private readonly archiveAgents;
+    private readonly archiveRunning;
+    private readonly archiveLastActivity;
+    private readonly archiveCollectors;
     /** 最近发过的原生表情 id（避免同一句描述永远同一个表情）。 */
     private readonly recentFaceIds;
     /** 最近用过的表情描述（注入给模型，提示它别连着用同一个）。 */
@@ -92,18 +98,23 @@ export declare class Bridge {
     private noteReplyMemeState;
     /** 连续几条回复没带表情（到阈值才提示，0=关闭）。 */
     private memeNudgeFor;
-    /** 人物群像 → 注入用数组（最多 6 个，避免占满预算）。 */
+    /** 人物群像 → 注入用数组（按评分取前 6，名字+画像）。 */
     private peopleFor;
-    /** 攒够 archiveEvery 条就让模型蒸馏一次（写进注入的"归档任务"，随下一轮回复带出）。 */
+    /** 定时器：待归档批次 + 群空闲够了 → 起一轮独立归档（模型专门做这件事）。 */
+    private archiveTick;
+    /** 攒够 archiveEvery 条就准备批次（真正执行由 archiveTick 起独立轮）。 */
     private maybePrepareArchive;
-    /** 从候选块里抽第一个能解析的归档 JSON（容忍代码块围栏与前后文字）。 */
-    private pickArchiveJson;
+    /** 开一个独立会话专门做归档：不进 bySession，输出不会发到 QQ。 */
+    private openArchiveAgent;
+    /** 跑一轮归档：模型只读素材、只输出 JSON（顺带把长期条目写进 mnemon）。 */
+    private runArchiveTurn;
+    /** 收集归档轮的输出（只对归档会话生效，不投递给 QQ）。 */
+    private collectArchiveOutput;
+    /** 归档落盘：条目走评分合并（同 key 累加 hits），再按评分淘汰边缘条目。 */
+    private applyArchivePayload;
     private bumpArchiveMiss;
-    /**
-     * 处理模型输出里的归档块：存摘要/人物卡，并从发往 QQ 的文本里剥离。
-     * 容错：`<归档>…</归档>`、`<archive>…</archive>`、`【归档】…`、以及包在 ``` 代码块里的写法。
-     */
-    private consumeArchiveBlock;
+    /** 仅把旧格式的 <归档> 块从回复里剥掉（不再依赖它归档，纯安全网）。 */
+    private stripArchiveBlock;
     /** 缓冲不足时才预热；同一聊天 5 分钟内最多尝试一次。 */
     private maybeWarmup;
     /** 用 NapCat 的历史消息接口预热 recent 缓冲（群 get_group_msg_history / 私聊 get_friend_msg_history）。 */

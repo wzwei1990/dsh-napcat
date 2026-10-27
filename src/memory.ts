@@ -2,6 +2,7 @@
 
 import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { mergeItem, pruneItems, topItems, type MemoryItem, type MemoryKind } from './memscore.js'
 
 import type { LogLevel } from './onebot.js'
 
@@ -33,7 +34,10 @@ export interface ChatLike {
 const RECENT_FILE = 'recent.jsonl'
 const SPACE_FILE = 'space.json'
 const NOTES_FILE = 'notes.md'
-const SUMMARY_FILE = 'summary.jsonl'
+const SUMMARY_FILE = 'summary.json'
+const SUMMARY_LEGACY = 'summary.jsonl'
+const FACTS_FILE = 'facts.json'
+const ITEMS_FILE = 'items.json'
 const ARCHIVE_FILE = 'archive.json'
 const ARCHIVE_BATCH_FILE = 'archive-pending.jsonl'
 const PEOPLE_FILE = 'people.json'
@@ -199,6 +203,17 @@ export class MemoryStore {
   }
 
   /** 登记空间 id（供 napcat_memory_space 工具调用）。 */
+  /** 读已登记的 mnemon 空间 id（没有就 undefined）。 */
+  async readSpaceId(chatKey: string): Promise<string | undefined> {
+    try {
+      const raw = await readFile(join(this.dirFor(chatKey), SPACE_FILE), 'utf8')
+      const parsed = JSON.parse(raw) as { id?: unknown }
+      return typeof parsed.id === 'string' && parsed.id !== '' ? parsed.id : undefined
+    } catch {
+      return undefined
+    }
+  }
+
   async saveSpace(chatKey: string, spaceId: string): Promise<void> {
     const dir = await this.ensureDir(chatKey)
     await writeFile(join(dir, SPACE_FILE), JSON.stringify({ id: spaceId }, null, 2), 'utf8')
@@ -474,7 +489,146 @@ export class MemoryStore {
     return path
   }
 
-  /** 追加一段归档摘要。 */
+  /** 读评分条目（items.json）；旧数据（people.json/facts.json）首次会迁移过来。 */
+  async readItems(chatKey: string): Promise<MemoryItem[]> {
+    try {
+      const raw = await readFile(join(this.dirFor(chatKey), ITEMS_FILE), 'utf8')
+      const parsed = JSON.parse(raw) as { items?: unknown }
+      if (Array.isArray(parsed.items)) {
+        const items: MemoryItem[] = []
+        for (const raw of parsed.items) {
+          if (raw === null || typeof raw !== 'object') continue
+          const item = raw as Record<string, unknown>
+          const kind = item.kind
+          if (kind !== 'summary' && kind !== 'glossary' && kind !== 'setting' && kind !== 'person'
+            && kind !== 'preference' && kind !== 'style' && kind !== 'todo' && kind !== 'event') continue
+          const text = typeof item.text === 'string' ? item.text : ''
+          if (text.trim() === '') continue
+          const num = (value: unknown, fallback: number): number => (typeof value === 'number' && Number.isFinite(value) ? value : fallback)
+          items.push({
+            kind,
+            key: typeof item.key === 'string' ? item.key : text.trim().toLowerCase(),
+            text,
+            score: num(item.score, 0.6),
+            hits: num(item.hits, 1),
+            createdAt: num(item.createdAt, Date.now()),
+            updatedAt: num(item.updatedAt, Date.now()),
+            lastSeenAt: num(item.lastSeenAt, Date.now()),
+            ...(typeof item.expiresAt === 'number' ? { expiresAt: item.expiresAt } : {}),
+          })
+        }
+        return items
+      }
+    } catch {
+      // 还没迁移
+    }
+    // 迁移：people.json + facts.json → items（一次性）
+    const now = Date.now()
+    let items: MemoryItem[] = []
+    const people = await this.readPeople(chatKey)
+    for (const [name, card] of Object.entries(people)) {
+      const detail = [card.style, card.topics !== undefined && card.topics.length > 0 ? '常聊 ' + card.topics.join('/') : '']
+        .filter(part => part !== undefined && part !== '')
+        .join('；')
+      items = mergeItem(items, { kind: 'person', text: name + (detail !== '' ? '：' + detail : ''), weight: card.weight }, now)
+    }
+    const facts = await this.readFacts(chatKey)
+    for (const text of facts.glossary) items = mergeItem(items, { kind: 'glossary', text }, now)
+    for (const text of facts.setting) items = mergeItem(items, { kind: 'setting', text }, now)
+    if (items.length > 0) await this.saveItems(chatKey, items)
+    return items
+  }
+
+  async saveItems(chatKey: string, items: readonly MemoryItem[]): Promise<void> {
+    const dir = await this.ensureDir(chatKey)
+    const path = join(dir, ITEMS_FILE)
+    const tmp = path + '.tmp'
+    await writeFile(tmp, JSON.stringify({ items, updatedAt: Date.now() }), 'utf8')
+    await rename(tmp, path)
+  }
+
+  /** 合并一批新观察到 items（同 key 累加 hits），再按评分淘汰。 */
+  async mergeItemsInto(
+    chatKey: string,
+    incoming: ReadonlyArray<{ kind: MemoryKind; text: string; weight?: number; expiresAt?: number }>,
+    options: { maxPerKind?: number; minScore?: number; forgetAfterMs?: number } = {},
+  ): Promise<{ kept: number; dropped: number }> {
+    const now = Date.now()
+    let items = await this.readItems(chatKey)
+    for (const item of incoming) items = mergeItem(items, item, now)
+    const pruned = pruneItems(items, { now, ...options })
+    await this.saveItems(chatKey, pruned.items)
+    return { kept: pruned.items.length, dropped: pruned.dropped }
+  }
+
+  /** 注入用：取某类评分最高的若干条文本。 */
+  async topTexts(chatKey: string, kind: MemoryKind, limit: number): Promise<string[]> {
+    const items = await this.readItems(chatKey)
+    const now = Date.now()
+    return topItems(items.filter(item => item.expiresAt === undefined || item.expiresAt > now), kind, limit)
+      .map(item => item.text)
+  }
+
+  /** 读当前滚动摘要（单一版本；旧版 summary.jsonl 兜底取最后一段）。 */
+  async readSummary(chatKey: string): Promise<{ text: string; from: number; to: number; updatedAt: number } | undefined> {
+    try {
+      const raw = await readFile(join(this.dirFor(chatKey), SUMMARY_FILE), 'utf8')
+      const parsed = JSON.parse(raw) as { text?: unknown; from?: unknown; to?: unknown; updatedAt?: unknown }
+      if (typeof parsed.text === 'string' && parsed.text.trim() !== '') {
+        return {
+          text: parsed.text.trim(),
+          from: typeof parsed.from === 'number' ? parsed.from : 0,
+          to: typeof parsed.to === 'number' ? parsed.to : 0,
+          updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
+        }
+      }
+    } catch {
+      // 没有当前版本，试旧版
+    }
+    const legacy = await this.readSummaries(chatKey, 1)
+    const text = legacy[0]
+    return text === undefined ? undefined : { text, from: 0, to: 0, updatedAt: 0 }
+  }
+
+  /** 覆盖当前滚动摘要（模型每次输出"合并后的完整版"，旧内容被替换而不是追加）。 */
+  async saveSummary(chatKey: string, entry: { text: string; from: number; to: number }): Promise<void> {
+    const dir = await this.ensureDir(chatKey)
+    const path = join(dir, SUMMARY_FILE)
+    const tmp = path + '.tmp'
+    const payload = JSON.stringify({ text: entry.text.slice(0, 1500), from: entry.from, to: entry.to, updatedAt: Date.now() })
+    await writeFile(tmp, payload, 'utf8')
+    await rename(tmp, path)
+  }
+
+  /** 群级结构化事实（黑话/设定）：按内容更新，不无限堆叠。 */
+  async readFacts(chatKey: string): Promise<{ glossary: string[]; setting: string[] }> {
+    try {
+      const raw = await readFile(join(this.dirFor(chatKey), FACTS_FILE), 'utf8')
+      const parsed = JSON.parse(raw) as { glossary?: unknown; setting?: unknown }
+      const pick = (value: unknown): string[] => Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === 'string' && item.trim() !== '').slice(0, 30)
+        : []
+      return { glossary: pick(parsed.glossary), setting: pick(parsed.setting) }
+    } catch {
+      return { glossary: [], setting: [] }
+    }
+  }
+
+  /** 覆盖写入群级事实（模型输出的是合并后的完整列表）。 */
+  async saveFacts(chatKey: string, facts: { glossary: string[]; setting: string[] }): Promise<void> {
+    const dir = await this.ensureDir(chatKey)
+    const path = join(dir, FACTS_FILE)
+    const tmp = path + '.tmp'
+    const payload = JSON.stringify({
+      glossary: [...new Set(facts.glossary.map(item => item.trim()).filter(item => item !== ''))].slice(0, 30),
+      setting: [...new Set(facts.setting.map(item => item.trim()).filter(item => item !== ''))].slice(0, 30),
+      updatedAt: Date.now(),
+    })
+    await writeFile(tmp, payload, 'utf8')
+    await rename(tmp, path)
+  }
+
+  /** 追加一段归档摘要（旧版格式，保留兼容）。 */
   async appendSummary(chatKey: string, entry: { from: number; to: number; text: string }): Promise<void> {
     const dir = await this.ensureDir(chatKey)
     const path = join(dir, SUMMARY_FILE)
@@ -503,17 +657,17 @@ export class MemoryStore {
   }
 
   /** 人物群像快照（名字 → 一句话画像）。 */
-  async readPeople(chatKey: string): Promise<Record<string, { names?: string[]; style?: string; topics?: string[] }>> {
+  async readPeople(chatKey: string): Promise<Record<string, { names?: string[]; style?: string; topics?: string[]; weight?: number }>> {
     try {
       const raw = await readFile(join(this.dirFor(chatKey), PEOPLE_FILE), 'utf8')
-      const parsed = JSON.parse(raw) as Record<string, { names?: string[]; style?: string; topics?: string[] }>
+      const parsed = JSON.parse(raw) as Record<string, { names?: string[]; style?: string; topics?: string[]; weight?: number }>
       return parsed !== null && typeof parsed === 'object' ? parsed : {}
     } catch {
       return {}
     }
   }
 
-  async savePeople(chatKey: string, people: Record<string, { names?: string[]; style?: string; topics?: string[] }>): Promise<void> {
+  async savePeople(chatKey: string, people: Record<string, { names?: string[]; style?: string; topics?: string[]; weight?: number }>): Promise<void> {
     const dir = await this.ensureDir(chatKey)
     const path = join(dir, PEOPLE_FILE)
     const tmp = path + '.tmp'
@@ -522,7 +676,7 @@ export class MemoryStore {
   }
 
   /** 组装注入文本（含 @ 优先级指令），超预算截断。 */
-  buildInjection(parts: { chatKey: string; recent: readonly string[]; recallText?: string; mention?: string; spaceId?: string; recentExpressions?: readonly string[]; archiveTask?: { path: string; count: number }; memeNudge?: number; summaries?: readonly string[]; people?: ReadonlyArray<{ name: string; style?: string; topics?: readonly string[] }> }): string {
+  buildInjection(parts: { chatKey: string; recent: readonly string[]; recallText?: string; mention?: string; spaceId?: string; recentExpressions?: readonly string[]; memeNudge?: number; summary?: string; facts?: { glossary: readonly string[]; setting: readonly string[]; preference?: readonly string[]; style?: readonly string[]; todo?: readonly string[]; event?: readonly string[] }; people?: ReadonlyArray<{ name: string; style?: string; topics?: readonly string[] }> }): string {
     const blocks: string[] = []
     blocks.push('这个会话来自 QQ（NapCat 渠道），聊天对象是 ' + parts.chatKey + '。')
     if (parts.mention !== undefined && parts.mention !== '') {
@@ -577,22 +731,38 @@ export class MemoryStore {
     if (parts.recallText !== undefined && parts.recallText !== '') {
       blocks.push('【本群长期记忆（相关片段）】\n' + parts.recallText)
     }
-    // 归档任务：本轮顺带蒸馏一段摘要 + 人物卡（输出会被插件剥离，不会发给群友）
-    if (parts.archiveTask !== undefined) {
-      blocks.push('【本轮归档任务（顺手做，不改变你回答用户的内容）】'
-        + '\n素材文件：' + parts.archiveTask.path + '（' + parts.archiveTask.count + ' 条消息，JSONL 每行 {t,nick,text}；只读不改）'
-        + '\n在你的回复**最末尾**额外输出一段（用户看不到，插件会剥离并存档）：'
-        + '\n<归档>{"summary":"3~5 句，写人写事、不写流水账","people":[{"name":"昵称","style":"说话风格一句话","topics":["常聊话题"]}],"glossary":["黑话/梗"],"setting":["群规矩/称呼"]}</归档>'
-        + '\n要求：people 只写**有辨识度**的人，最多 5 个；没把握的字段留空数组或省略；其余字段没内容就省略。')
-    }
+
     // 表情提醒：连着几条没带图时，轻推一把（不是命令，只是提示）
     if (parts.memeNudge !== undefined && parts.memeNudge > 0) {
       blocks.push('【这轮可以带个表情】最近 ' + parts.memeNudge + ' 条回复都没带表情包了；如果本轮气氛合适（吐槽、接梗、搞笑、卖萌），'
         + '就在回复里加一个 [表情:描述]（优先图库图，写具体点或抄候选 caption）。不必硬凑。')
     }
-    // 温层：归档摘要（近期脉络）——比原文省 token，又能跨几十轮保持连贯
-    if (parts.summaries !== undefined && parts.summaries.length > 0) {
-      blocks.push('【近期脉络（归档摘要，越靠后越新）】\n' + parts.summaries.map(line => '- ' + line).join('\n'))
+    // 群氛围（最高优先：决定语气与分寸）
+    if (parts.facts?.style !== undefined && parts.facts.style.length > 0) {
+      blocks.push('【本群氛围（决定语气）】' + parts.facts.style.join('；'))
+    }
+    // 偏好：谁喜欢/讨厌什么
+    if (parts.facts?.preference !== undefined && parts.facts.preference.length > 0) {
+      blocks.push('【本群偏好/忌讳】\n' + parts.facts.preference.map(line => '- ' + line).join('\n'))
+    }
+    // 待办/约定（未来）
+    if (parts.facts?.todo !== undefined && parts.facts.todo.length > 0) {
+      blocks.push('【待办/约定（未到期）】\n' + parts.facts.todo.map(line => '- ' + line).join('\n'))
+    }
+    // 最近事件（已发生，会淡出）
+    if (parts.facts?.event !== undefined && parts.facts.event.length > 0) {
+      blocks.push('【最近发生的事】\n' + parts.facts.event.map(line => '- ' + line).join('\n'))
+    }
+    // 温层：滚动摘要（每次归档合并更新，不叠加）
+    if (parts.summary !== undefined && parts.summary !== '') {
+      blocks.push('【近期脉络（滚动摘要，每次归档合并更新）】\n' + parts.summary)
+    }
+    // 群级事实：黑话 / 设定（同样覆盖式更新）
+    if (parts.facts !== undefined) {
+      const facts: string[] = []
+      if (parts.facts.setting.length > 0) facts.push('设定：' + parts.facts.setting.join('；'))
+      if (parts.facts.glossary.length > 0) facts.push('黑话：' + parts.facts.glossary.join('、'))
+      if (facts.length > 0) blocks.push('【本群固定信息（长期有效）】\n' + facts.join('\n'))
     }
     // 人物群像：只有一句画像，别展开成小作文
     if (parts.people !== undefined && parts.people.length > 0) {

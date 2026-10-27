@@ -1,4 +1,5 @@
 /** 群/私聊记忆：一群一目录隔离 + 最近消息缓冲；长期记忆走 mnemon（失败则落本地 notes.md）。 */
+import { type MemoryItem, type MemoryKind } from './memscore.js';
 import type { LogLevel } from './onebot.js';
 export interface MemoryOptions {
     ctx: unknown;
@@ -42,6 +43,8 @@ export declare class MemoryStore {
     /** 埋点：把 agent 的会话事件尾部写进 _debug.log，用于排查 mnemon 的 turn/View 绑定。 */
     dumpTurnState(chatKey: string, agent: unknown): Promise<void>;
     /** 登记空间 id（供 napcat_memory_space 工具调用）。 */
+    /** 读已登记的 mnemon 空间 id（没有就 undefined）。 */
+    readSpaceId(chatKey: string): Promise<string | undefined>;
     saveSpace(chatKey: string, spaceId: string): Promise<void>;
     /** 写一条长期记忆：优先 mnemon，失败落 notes.md。 */
     remember(chatKey: string, content: string, agent: unknown, tags?: readonly string[]): Promise<string>;
@@ -97,7 +100,49 @@ export declare class MemoryStore {
         nick: string;
         text: string;
     }>): Promise<string>;
-    /** 追加一段归档摘要。 */
+    /** 读评分条目（items.json）；旧数据（people.json/facts.json）首次会迁移过来。 */
+    readItems(chatKey: string): Promise<MemoryItem[]>;
+    saveItems(chatKey: string, items: readonly MemoryItem[]): Promise<void>;
+    /** 合并一批新观察到 items（同 key 累加 hits），再按评分淘汰。 */
+    mergeItemsInto(chatKey: string, incoming: ReadonlyArray<{
+        kind: MemoryKind;
+        text: string;
+        weight?: number;
+        expiresAt?: number;
+    }>, options?: {
+        maxPerKind?: number;
+        minScore?: number;
+        forgetAfterMs?: number;
+    }): Promise<{
+        kept: number;
+        dropped: number;
+    }>;
+    /** 注入用：取某类评分最高的若干条文本。 */
+    topTexts(chatKey: string, kind: MemoryKind, limit: number): Promise<string[]>;
+    /** 读当前滚动摘要（单一版本；旧版 summary.jsonl 兜底取最后一段）。 */
+    readSummary(chatKey: string): Promise<{
+        text: string;
+        from: number;
+        to: number;
+        updatedAt: number;
+    } | undefined>;
+    /** 覆盖当前滚动摘要（模型每次输出"合并后的完整版"，旧内容被替换而不是追加）。 */
+    saveSummary(chatKey: string, entry: {
+        text: string;
+        from: number;
+        to: number;
+    }): Promise<void>;
+    /** 群级结构化事实（黑话/设定）：按内容更新，不无限堆叠。 */
+    readFacts(chatKey: string): Promise<{
+        glossary: string[];
+        setting: string[];
+    }>;
+    /** 覆盖写入群级事实（模型输出的是合并后的完整列表）。 */
+    saveFacts(chatKey: string, facts: {
+        glossary: string[];
+        setting: string[];
+    }): Promise<void>;
+    /** 追加一段归档摘要（旧版格式，保留兼容）。 */
     appendSummary(chatKey: string, entry: {
         from: number;
         to: number;
@@ -110,11 +155,13 @@ export declare class MemoryStore {
         names?: string[];
         style?: string;
         topics?: string[];
+        weight?: number;
     }>>;
     savePeople(chatKey: string, people: Record<string, {
         names?: string[];
         style?: string;
         topics?: string[];
+        weight?: number;
     }>): Promise<void>;
     /** 组装注入文本（含 @ 优先级指令），超预算截断。 */
     buildInjection(parts: {
@@ -124,12 +171,16 @@ export declare class MemoryStore {
         mention?: string;
         spaceId?: string;
         recentExpressions?: readonly string[];
-        archiveTask?: {
-            path: string;
-            count: number;
-        };
         memeNudge?: number;
-        summaries?: readonly string[];
+        summary?: string;
+        facts?: {
+            glossary: readonly string[];
+            setting: readonly string[];
+            preference?: readonly string[];
+            style?: readonly string[];
+            todo?: readonly string[];
+            event?: readonly string[];
+        };
         people?: ReadonlyArray<{
             name: string;
             style?: string;

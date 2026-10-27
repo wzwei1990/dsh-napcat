@@ -72,6 +72,8 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'injectMaxChars', label: '记忆注入字符上限', kind: 'number' },
         { key: 'warmupStaleMinutes', label: '预热新鲜度：最新一条超过多少分钟视为过期', kind: 'number' },
         { key: 'archiveEvery', label: '归档节奏：攒够多少条消息蒸馏一次摘要/人物卡（0=关闭）', kind: 'number' },
+        { key: 'archiveIdleMinutes', label: '群空闲多少分钟后起一轮独立归档（分钟）', kind: 'number' },
+        { key: 'archiveEventDays', label: '事件类记忆保留天数（到期自动淡出）', kind: 'number' },
         { key: 'warmupImages', label: '预热时也缓存历史图片（file id 失效则标记已过期）', kind: 'boolean' },
         { key: 'warmupImageLimit', label: '单次预热最多下载几张历史图片（默认 30）', kind: 'number' },
         { key: 'proactiveEnabled', label: '主动发言（伪人模式）：群里有话题时自己插话', kind: 'boolean' },

@@ -82,6 +82,8 @@ export interface Config {
     injectMaxChars: number;
     warmupStaleMinutes: number;
     archiveEvery: number;
+    archiveIdleMinutes: number;
+    archiveEventDays: number;
     warmupImages: boolean;
     warmupImageLimit: number;
 }

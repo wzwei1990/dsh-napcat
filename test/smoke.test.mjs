@@ -464,16 +464,121 @@ test('归档流水线：待归档批次 → 摘要/人物 → 注入', async () 
     assert.equal(rows2.length, 2)
     assert.equal(rows2[0].text, '消息4')
     // 注入能看到摘要与人物
-    const summaries = await store.readSummaries('group:1', 3)
+    // 摘要：覆盖式（再归档一次不会变两段）
+    await store.saveSummary('group:1', { text: '第一版摘要', from: 1000, to: 1003 })
+    await store.saveSummary('group:1', { text: '第二版摘要（合并）', from: 1000, to: 1003 })
+    const summary = await store.readSummary('group:1')
+    assert.equal(summary?.text, '第二版摘要（合并）')
+    // facts：覆盖式
+    await store.saveFacts('group:1', { glossary: ['好家伙'], setting: ['群主要叫帅哥'] })
+    const facts = await store.readFacts('group:1')
+    assert.deepEqual(facts.glossary, ['好家伙'])
     const people = await store.readPeople('group:1')
     const inj = store.buildInjection({
       chatKey: 'group:1', recent: [], recallText: '', spaceId: 'x',
-      summaries, people: Object.entries(people).map(([name, card]) => ({ name, style: card.style, topics: card.topics })),
+      summary: summary?.text, facts,
+      people: Object.entries(people).map(([name, card]) => ({ name, style: card.style, topics: card.topics })),
     })
     assert.ok(inj.includes('【近期脉络'))
-    assert.ok(inj.includes('聊了抽卡和拼胶'))
+    assert.ok(inj.includes('第二版摘要'))
+    assert.ok(inj.includes('【本群固定信息'))
+    assert.ok(inj.includes('群主要叫帅哥'))
     assert.ok(inj.includes('【本群人物'))
     assert.ok(inj.includes('老灯'))
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+test('归档提示词与解析：合并语义 + 容忍围栏', async () => {
+  const { buildArchivePrompt, parseArchivePayload } = await import('../lib/archive.js')
+  const prompt = buildArchivePrompt({
+    path: '/workspace/memory/group-1/archive-pending.jsonl',
+    count: 50,
+    chatKey: 'group:1',
+    existing: {
+      summary: '之前在聊抽卡',
+      people: [{ name: '老灯', style: '吐槽型', topics: ['抽卡'] }],
+      glossary: ['好家伙'],
+      setting: ['群主要叫帅哥'],
+    },
+  })
+  assert.ok(prompt.includes('更新后的完整版本'))
+  assert.ok(prompt.includes('只做归档'))
+  assert.ok(prompt.includes('之前在聊抽卡'))
+  assert.ok(prompt.includes('老灯'))
+  // 解析：普通 JSON
+  const plain = parseArchivePayload('{"summary":"聊了拼胶","people":[{"name":"顿顿","style":"技术流"}]}')
+  assert.equal(plain?.summary, '聊了拼胶')
+  assert.equal(plain?.people?.[0]?.name, '顿顿')
+  // 解析：包在代码围栏 + 前后废话
+  const fenced = parseArchivePayload('好的，结果如下：\n```json\n{"summary":"带围栏也能解析","glossary":["哦豁"]}\n```\n以上。')
+  assert.equal(fenced?.summary, '带围栏也能解析')
+  assert.deepEqual(fenced?.glossary, [{ text: '哦豁' }])
+  // 解析：旧 <归档> 包装
+  const tagged = parseArchivePayload('<归档>{"setting":["群主要叫帅哥"]}</归档>')
+  assert.deepEqual(tagged?.setting, [{ text: '群主要叫帅哥' }])
+  // 无效输出
+  assert.equal(parseArchivePayload('这句不是 JSON'), undefined)
+})
+test('评分机制：同 key 合并累加 hits，低分陈旧条目被淘汰', async () => {
+  const { mergeItem, pruneItems, effectiveScore, normalizeKey, topItems } = await import('../lib/memscore.js')
+  const now = Date.now()
+  let items = []
+  items = mergeItem(items, { kind: 'setting', text: '群主要叫帅哥', weight: 5 }, now)
+  // 同一条（差标点）再出现 → 合并，不新增
+  items = mergeItem(items, { kind: 'setting', text: '群主要叫帅哥。', weight: 5 }, now + 1000)
+  assert.equal(items.length, 1)
+  assert.equal(items[0].hits, 2)
+  assert.equal(normalizeKey('群主要叫帅哥。'), normalizeKey('群主要叫帅哥'))
+  // 边缘条目：低权重 + 很久没出现
+  items = mergeItem(items, { kind: 'glossary', text: '一次性梗', weight: 1 }, now - 365 * 24 * 3600_000)
+  const pruned = pruneItems(items, { now, minScore: 0.25, forgetAfterMs: 45 * 24 * 3600_000 })
+  const keys = pruned.items.map(item => item.key)
+  assert.ok(keys.includes(normalizeKey('群主要叫帅哥')), '核心条目要保留')
+  assert.ok(!keys.includes(normalizeKey('一次性梗')), '低分陈旧条目要淘汰')
+  // 上限截断：高分优先
+  let many = []
+  for (let i = 0; i < 40; i += 1) many = mergeItem(many, { kind: 'glossary', text: '词' + i, weight: i % 5 + 1 }, now)
+  const capped = pruneItems(many, { now, maxPerKind: 10 })
+  assert.equal(capped.items.length, 10)
+  assert.ok(effectiveScore(capped.items[0], now) >= effectiveScore(capped.items[9], now))
+  assert.equal(topItems(capped.items, 'glossary', 3).length, 3)
+})
+test('新分类：偏好/氛围/待办/事件入库并注入，过期待办自动剔除', async () => {
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const tmp = mkdtempSync(join(tmpdir(), 'cats-'))
+  try {
+    const store = new MemoryStore({
+      ctx: {}, root: tmp, spacePrefix: 'napcat-', backend: 'file',
+      recentLimit: 200, injectRecent: 20, injectMaxChars: 6000, log: () => undefined,
+    })
+    const now = Date.now()
+    await store.mergeItemsInto('group:1', [
+      { kind: 'setting', text: '群主要叫帅哥', weight: 5 },
+      { kind: 'preference', text: '老灯不喝咖啡', weight: 3 },
+      { kind: 'style', text: '群里爱接梗互损', weight: 4 },
+      { kind: 'todo', text: '周六开黑', weight: 4, expiresAt: now + 5 * 86_400_000 },
+      { kind: 'todo', text: '过期的事', weight: 4, expiresAt: now - 86_400_000 },
+      { kind: 'event', text: '老灯拼完了模型', weight: 2, expiresAt: now + 30 * 86_400_000 },
+    ])
+    const facts = {
+      glossary: await store.topTexts('group:1', 'glossary', 8),
+      setting: await store.topTexts('group:1', 'setting', 8),
+      preference: await store.topTexts('group:1', 'preference', 6),
+      style: await store.topTexts('group:1', 'style', 2),
+      todo: await store.topTexts('group:1', 'todo', 5),
+      event: await store.topTexts('group:1', 'event', 5),
+    }
+    assert.deepEqual(facts.todo, ['周六开黑'])
+    assert.deepEqual(facts.preference, ['老灯不喝咖啡'])
+    const inj = store.buildInjection({ chatKey: 'group:1', recent: [], recallText: '', spaceId: 'x', facts })
+    assert.ok(inj.includes('【本群氛围'))
+    assert.ok(inj.includes('【本群偏好/忌讳'))
+    assert.ok(inj.includes('【待办/约定'))
+    assert.ok(inj.includes('【最近发生的事'))
+    assert.ok(!inj.includes('过期的事'))
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }
