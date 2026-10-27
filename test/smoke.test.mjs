@@ -630,3 +630,31 @@ test('归档批次：处理完清文件，重启后不再重复', async () => {
     rmSync(tmp, { recursive: true, force: true })
   }
 })
+test('归档产物：生成人类可读的 memory.md', async () => {
+  const { mkdtempSync, rmSync, readFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const tmp = mkdtempSync(join(tmpdir(), 'digest-'))
+  try {
+    const store = new MemoryStore({
+      ctx: {}, root: tmp, spacePrefix: 'napcat-', backend: 'file',
+      recentLimit: 200, injectRecent: 20, injectMaxChars: 4000, log: () => undefined,
+    })
+    const now = Date.now()
+    await store.saveSummary('group:1', { text: '最近在聊抽卡', from: now - 1000, to: now })
+    await store.mergeItemsInto('group:1', [
+      { kind: 'person', text: '老灯：吐槽型', weight: 4 },
+      { kind: 'setting', text: '群主要叫帅哥', weight: 5 },
+    ])
+    await store.writeDigest('group:1')
+    const md = readFileSync(join(tmp, 'group-1', 'memory.md'), 'utf8')
+    assert.ok(md.includes('# 群记忆快照 group:1'))
+    assert.ok(md.includes('## 近期脉络'))
+    assert.ok(md.includes('最近在聊抽卡'))
+    assert.ok(md.includes('## 本群人物'))
+    assert.ok(md.includes('老灯'))
+    assert.ok(md.includes('## 设定'))
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})

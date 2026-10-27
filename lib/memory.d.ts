@@ -130,6 +130,8 @@ export declare class MemoryStore {
     topTexts(chatKey: string, kind: MemoryKind, limit: number): Promise<string[]>;
     /** 删除待归档批次文件（归档完成或放弃后调用，避免重启后重复处理）。 */
     clearArchiveBatch(chatKey: string): Promise<void>;
+    /** 生成人类可读的记忆快照 memory.md（便于直接翻看，不参与注入）。 */
+    writeDigest(chatKey: string): Promise<void>;
     /** 读当前滚动摘要（单一版本；旧版 summary.jsonl 兜底取最后一段）。 */
     readSummary(chatKey: string): Promise<{
         text: string;
