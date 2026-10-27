@@ -34,6 +34,8 @@ export interface ChatLike {
 const RECENT_FILE = 'recent.jsonl'
 const SPACE_FILE = 'space.json'
 const NOTES_FILE = 'notes.md'
+/** 安全审计流水（危险请求的拒绝/放行）。 */
+const AUDIT_FILE = 'audit.jsonl'
 const SUMMARY_FILE = 'summary.json'
 const SUMMARY_LEGACY = 'summary.jsonl'
 const FACTS_FILE = 'facts.json'
@@ -612,6 +614,35 @@ export class MemoryStore {
     const now = Date.now()
     return topItems(items.filter(item => item.expiresAt === undefined || item.expiresAt > now), kind, limit)
       .map(item => item.text)
+  }
+
+  /** 记一条安全审计（危险请求的拒绝/放行），落 audit.jsonl。 */
+  async appendAudit(chatKey: string, row: { at: number; userId: string; nick?: string; role: 'admin' | 'member'; word: string; category: string; decision: 'rejected' | 'allowed' }): Promise<void> {
+    try {
+      const dir = await this.ensureDir(chatKey)
+      await appendFile(join(dir, AUDIT_FILE), JSON.stringify(row) + '\n', 'utf8')
+    } catch {
+      // 审计失败不影响主流程
+    }
+  }
+
+  /** 读最近 N 条审计（新的在前）。 */
+  async readAudit(chatKey: string, limit = 20): Promise<Array<Record<string, unknown>>> {
+    try {
+      const raw = await readFile(join(this.dirFor(chatKey), AUDIT_FILE), 'utf8')
+      const rows: Array<Record<string, unknown>> = []
+      for (const line of raw.split('\n')) {
+        if (line.trim() === '') continue
+        try {
+          rows.push(JSON.parse(line) as Record<string, unknown>)
+        } catch {
+          // 坏行跳过
+        }
+      }
+      return rows.slice(-Math.max(1, limit)).reverse()
+    } catch {
+      return []
+    }
   }
 
   /** 删除待归档批次文件（归档完成或放弃后调用，避免重启后重复处理）。 */

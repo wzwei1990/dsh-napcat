@@ -51,6 +51,37 @@ QQ 用户 <──回复──── NapCat <──动作(WS)────┘   �
 | **温上下文** | 滚动摘要 + 人物群像 + 设定/黑话/**偏好 / 氛围 / 待办 / 事件**（`items.json`，带评分与过期） | 每轮注入 → 「记得前几天的脉络、谁是谁、谁爱什么、约过什么」 |
 | **长期记忆** | 群设定 / 黑话 / 人物关系 / 事实结论（mnemon 记忆空间，一群一个） | 显式召回（固定层 + 按需层两次） |
 
+### 安全规则：危险操作只允许管理员
+
+照 `dsh-onebot` 的命令门禁思路，在**入站派发之前**加了一道确定性判定（不依赖模型听话）：
+
+```
+消息进来 → 危险词表匹配 → 命中且非管理员 → 直接拒绝（不投给模型）+ 审计
+                        → 命中且是管理员   → 放行 + 审计
+```
+
+内置 19 条规则（`src/danger.ts`），覆盖：
+
+| 分类 | 例子 |
+|---|---|
+| 删除 | `删了/删除 文件/目录/仓库`、`rm -rf`、`rmdir`、`Remove-Item` |
+| 数据库 | `drop table/database`、`DELETE FROM`、`删库`、`清空所有数据` |
+| git | `git reset --hard`、`git clean -f`、`git push --force` |
+| 系统 | `format c:`、`diskpart`、`mkfs`、`shutdown/reboot/关机`、`rm -rf /` |
+| 记忆 | `清空记忆/删除记忆/忘掉上下文`、`forget all` |
+| 配置 | 删除/覆盖 `.env`、改配置、卸载插件 |
+| 权限 | `chmod -R`、`chown -R`、`takeown`、`icacls` |
+
+除内置规则外，可用 `dangerWords` 追加自定义词（包含即命中）。
+
+被拒时回一句可配置的话（`dangerReply`，默认「这类操作只允许管理员发起。」），**同一会话 10 分钟最多回一次**，避免刷屏。每次命中都记进 `memory/<群>/audit.jsonl`：
+
+```json
+{"at":1792738405000,"userId":"11470","nick":"路人","role":"member","word":"删除","category":"删除","decision":"rejected"}
+```
+
+`role` 只有 `admin` / `member` 两种，管理员名单来自 `adminUsers`。
+
 ### 归档轮（把冷历史蒸馏成温上下文）
 
 ### 记忆分类（8 类，都有评分与生命周期）
@@ -377,7 +408,7 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `memorySpaces` | `'` | 手填空间 id（`group:<群号>=<id>`）；留空由模型首次使用时自动创建并登记 |
 | `memorySpacePrefix` | `napcat-` | 自动创建空间时的名字前缀 |
 | `memeNudgeAfter` | `2` | 连续几条回复没带表情就注入提醒一次（0=不提醒） |
-| `archiveEvery` | `50` | 归档节奏：攒够这么多条就让模型蒸馏一次（0=关闭） |`n| `archiveEventDays` | `45` | 事件类记忆保留天数（到期自动淡出） |
+| `archiveEvery` | `50` | 归档节奏：攒够这么多条就让模型蒸馏一次（0=关闭） |`n| `archiveEventDays` | `45` | 事件类记忆保留天数（到期自动淡出） |`n| `dangerPolicy` | `admin-only` | 危险操作策略：admin-only=仅管理员可发起 / allow=谁都能发 / off=不拦截 |`n| `dangerWords` | `[]` | 额外危险词（包含即命中） |`n| `dangerReply` | `这类操作只允许管理员发起。` | 被拒时的回复文本 |
 | `archiveIdleMinutes` | `2` | 群空闲多少分钟后起一轮**独立归档**（模型专门跑，输出不进 QQ） |
 | `recentLimit` | `200` | 缓冲容量：保留多少条 = 预热补到多少条（含"最多存多少"与"补多少"两层含义；调小=少存少补） |
 | `injectRecent` | `20` | 每次触发注入最近对话条数（直接影响 token 成本） |

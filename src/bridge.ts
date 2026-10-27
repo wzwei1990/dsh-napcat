@@ -24,7 +24,8 @@ import { SessionId as makeSessionId } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 
 import type { Config } from './config.js'
-import { allowAccess, chatRefOf, sessionIdForChat, type ChatRef } from './chat.js'
+import { allowAccess, chatRefOf, isAdmin, sessionIdForChat, type ChatRef } from './chat.js'
+import { detectDanger } from './danger.js'
 import type { LogLevel, OneBotConnection } from './onebot.js'
 import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, stripKeyword, titleFrom, toText } from './text.js'
 import { MemoryStore } from './memory.js'
@@ -185,6 +186,8 @@ export class Bridge {
   private readonly imageCaches = new Map<string, ImageCache>()
   /** 已经清理过过期目录的 cwd。 */
   private readonly imageCacheSwept = new Set<string>()
+  /** 危险请求拒绝提示的节流时间（每会话 10 分钟一次，避免刷屏）。 */
+  private readonly dangerNoticeAt = new Map<string, number>()
 
   private imageCacheFor(cwd: string): ImageCache {
     const existing = this.imageCaches.get(cwd)
@@ -989,6 +992,29 @@ export class Bridge {
       }
     }
 
+    // ── 危险操作门禁：普通群友发这类请求直接拒，不投给模型 ──
+    if (this.opts.config.dangerPolicy !== 'off') {
+      const danger = detectDanger(rawText, this.opts.config.dangerWords)
+      if (danger !== undefined) {
+        const admin = isAdmin(this.opts.config, userId)
+        const allowAnyone = this.opts.config.dangerPolicy === 'allow'
+        if (!admin && !allowAnyone) {
+          void this.mem.appendAudit(ref.key, {
+            at: Date.now(), userId, nick: senderNick, role: 'member',
+            word: danger.word, category: danger.category, decision: 'rejected',
+          })
+          this.opts.log('warn', '拦截危险请求 ' + ref.key + ' user=' + userId + ' 命中=' + danger.word)
+          await this.replyDanger(ref)
+          return
+        }
+        void this.mem.appendAudit(ref.key, {
+          at: Date.now(), userId, nick: senderNick, role: admin ? 'admin' : 'member',
+          word: danger.word, category: danger.category, decision: 'allowed',
+        })
+        this.opts.log('info', '危险请求放行 ' + ref.key + ' user=' + userId + ' 命中=' + danger.word + ' role=' + (admin ? 'admin' : 'member'))
+      }
+    }
+
     const chat = await this.ensureChat(ref)
     if (this.opts.config.memoryEnabled) void this.mem.dumpTurnState(ref.key, chat.agent)
 
@@ -1742,6 +1768,22 @@ export class Bridge {
   }
 
   /** 出站发送：小黄脸嵌在文字里（同一条消息），图片/表情包单独发。 */
+  /** 拒绝危险请求时回一句（每会话 10 分钟最多一次，避免刷屏）。 */
+  private async replyDanger(ref: ChatRef): Promise<void> {
+    const now = Date.now()
+    const last = this.dangerNoticeAt.get(ref.key) ?? 0
+    if (now - last < 10 * 60_000) return
+    this.dangerNoticeAt.set(ref.key, now)
+    const text = this.opts.config.dangerReply
+    if (text.trim() === '') return
+    try {
+      const params: Record<string, unknown> = ref.kind === 'group' ? { group_id: ref.id, message: text } : { user_id: ref.id, message: text }
+      await this.opts.conn.call('send_msg', params)
+    } catch (error) {
+      this.opts.log('debug', '发送拒绝提示失败: ' + describe(error))
+    }
+  }
+
   private async sendText(chat: ChatState, text: string): Promise<void> {
     // 群禁言期间直接不发（QQ 会拒，还白烧一轮模型）
     const mutedUntil = this.mutedUntil.get(chat.ref.key) ?? 0

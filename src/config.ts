@@ -20,6 +20,12 @@ export interface Config {
   botQQ: string
   /** 管理员 QQ（私聊、工具发送默认只对管理员开放）。 */
   adminUsers: string[]
+  /** 危险操作策略：admin-only=仅管理员可发起；allow=谁都能发；off=不做词表拦截。 */
+  dangerPolicy: 'admin-only' | 'allow' | 'off'
+  /** 额外危险词（包含即命中）。 */
+  dangerWords: string[]
+  /** 拒绝时的回复文本。 */
+  dangerReply: string
   /** 私聊策略：admin=仅管理员；open=任何人；disabled=关闭。 */
   dmPolicy: 'admin' | 'open' | 'disabled'
   /** dmPolicy=open 时的额外白名单（留空=不限）。 */
@@ -108,6 +114,12 @@ export const Config: Z<Config> = z.object({
     .description('机器人自己的 QQ；留空则从事件里自动学习（影响 @ 门控与自消息过滤）').volatile(),
   adminUsers: z.array(z.string()).default([])
     .description('管理员 QQ 列表（私聊 + 主动发送工具默认只对管理员开放）').volatile(),
+  dangerPolicy: z.union([z.const('admin-only'), z.const('allow'), z.const('off')]).default('admin-only')
+    .description('危险操作（删除/删库/强推/格式化/清空记忆等）策略：admin-only=仅管理员可发起（默认），allow=谁都能发，off=不拦截').volatile(),
+  dangerWords: z.array(z.string()).default([])
+    .description('额外危险词（包含即命中，正则元字符会自动转义）').volatile(),
+  dangerReply: z.string().default('这类操作只允许管理员发起。')
+    .description('危险请求被拒时的回复文本').volatile(),
   dmPolicy: z.union([z.const('admin'), z.const('open'), z.const('disabled')]).default('admin')
     .description('私聊策略：admin=仅管理员；open=任何人；disabled=关闭').volatile(),
   allowFrom: z.array(z.string()).default([])
@@ -190,6 +202,9 @@ export const DEFAULTS: Config = {
   port: 8643,
   botQQ: '',
   adminUsers: [],
+  dangerPolicy: 'admin-only',
+  dangerWords: [],
+  dangerReply: '这类操作只允许管理员发起。',
   dmPolicy: 'admin',
   allowFrom: [],
   groupPolicy: 'allowlist',

@@ -658,3 +658,50 @@ test('归档产物：生成人类可读的 memory.md', async () => {
     rmSync(tmp, { recursive: true, force: true })
   }
 })
+test('危险词表：拦截删除/删库/强推/关机，放过正常闲聊', async () => {
+  const { detectDanger, dangerRules } = await import('../lib/danger.js')
+  for (const text of [
+    '帮我把 build 目录删了',
+    '把仓库里的文件全部删除',
+    'rm -rf /tmp/x',
+    'drop table users',
+    'git reset --hard HEAD~3',
+    'git push --force origin main',
+    'format c: /q',
+    'shutdown -h now',
+    '清空记忆',
+    '把 .env 覆盖一下',
+    '删库跑路',
+    '清理一下所有数据',
+  ]) {
+    assert.ok(detectDanger(text) !== undefined, '应命中: ' + text)
+  }
+  for (const text of ['今天抽卡抽到好东西了', '帮我看看这个报错是什么意思', '删除这个表情包吧哈哈', '这段代码里那个 delete 关键字怎么写']) {
+    assert.equal(detectDanger(text), undefined, '不该命中: ' + text)
+  }
+  assert.equal(detectDanger('把 nas 里的东西清了', ['nas'])?.category, '自定义')
+  assert.equal(detectDanger(''), undefined)
+  assert.ok(dangerRules().length >= 15)
+})
+
+test('审计：危险请求落 audit.jsonl 且可回读', async () => {
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const tmp = mkdtempSync(join(tmpdir(), 'audit-'))
+  try {
+    const store = new MemoryStore({
+      ctx: {}, root: tmp, spacePrefix: 'napcat-', backend: 'file',
+      recentLimit: 200, injectRecent: 20, injectMaxChars: 4000, log: () => undefined,
+    })
+    await store.appendAudit('group:1', { at: 1000, userId: '42', nick: '路人', role: 'member', word: '删除', category: '删除', decision: 'rejected' })
+    await store.appendAudit('group:1', { at: 2000, userId: '7', nick: '管理', role: 'admin', word: 'rm -rf', category: '删除', decision: 'allowed' })
+    const rows = await store.readAudit('group:1', 10)
+    assert.equal(rows.length, 2)
+    assert.equal(rows[0].decision, 'allowed')
+    assert.equal(rows[0].role, 'admin')
+    assert.equal(rows[1].userId, '42')
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})

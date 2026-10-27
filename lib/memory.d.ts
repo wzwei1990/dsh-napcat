@@ -128,6 +128,18 @@ export declare class MemoryStore {
     }>;
     /** 注入用：取某类评分最高的若干条文本。 */
     topTexts(chatKey: string, kind: MemoryKind, limit: number): Promise<string[]>;
+    /** 记一条安全审计（危险请求的拒绝/放行），落 audit.jsonl。 */
+    appendAudit(chatKey: string, row: {
+        at: number;
+        userId: string;
+        nick?: string;
+        role: 'admin' | 'member';
+        word: string;
+        category: string;
+        decision: 'rejected' | 'allowed';
+    }): Promise<void>;
+    /** 读最近 N 条审计（新的在前）。 */
+    readAudit(chatKey: string, limit?: number): Promise<Array<Record<string, unknown>>>;
     /** 删除待归档批次文件（归档完成或放弃后调用，避免重启后重复处理）。 */
     clearArchiveBatch(chatKey: string): Promise<void>;
     /** 生成人类可读的记忆快照 memory.md（便于直接翻看，不参与注入）。 */

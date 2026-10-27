@@ -17,6 +17,12 @@ export interface Config {
     botQQ: string;
     /** 管理员 QQ（私聊、工具发送默认只对管理员开放）。 */
     adminUsers: string[];
+    /** 危险操作策略：admin-only=仅管理员可发起；allow=谁都能发；off=不做词表拦截。 */
+    dangerPolicy: 'admin-only' | 'allow' | 'off';
+    /** 额外危险词（包含即命中）。 */
+    dangerWords: string[];
+    /** 拒绝时的回复文本。 */
+    dangerReply: string;
     /** 私聊策略：admin=仅管理员；open=任何人；disabled=关闭。 */
     dmPolicy: 'admin' | 'open' | 'disabled';
     /** dmPolicy=open 时的额外白名单（留空=不限）。 */

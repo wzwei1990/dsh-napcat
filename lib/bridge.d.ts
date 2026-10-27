@@ -44,6 +44,8 @@ export declare class Bridge {
     private readonly imageCaches;
     /** 已经清理过过期目录的 cwd。 */
     private readonly imageCacheSwept;
+    /** 危险请求拒绝提示的节流时间（每会话 10 分钟一次，避免刷屏）。 */
+    private readonly dangerNoticeAt;
     private imageCacheFor;
     /**
      * 观察层用：把消息里的图片落盘（imageCache=all 时），并把文件名写进聊天记录，
@@ -172,6 +174,8 @@ export declare class Bridge {
     /** 机器人自己的 QQ：配置优先，未配置时用 get_login_info 取一次并缓存。 */
     private selfQq;
     /** 出站发送：小黄脸嵌在文字里（同一条消息），图片/表情包单独发。 */
+    /** 拒绝危险请求时回一句（每会话 10 分钟最多一次，避免刷屏）。 */
+    private replyDanger;
     private sendText;
     /**
      * 出站预处理：把回复里的标记解析成「文字段 + 原生表情段」和「待发图片」。
