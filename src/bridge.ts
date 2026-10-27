@@ -477,6 +477,16 @@ export class Bridge {
     }
   }
 
+  /** 从会话 key（group:123 / private:456）还原 ChatRef，用于重启后还没人说话时也能归档。 */
+  private chatRefFromKey(key: string): ChatRef | undefined {
+    const index = key.indexOf(':')
+    if (index <= 0) return undefined
+    const kind = key.slice(0, index)
+    const id = key.slice(index + 1)
+    if ((kind !== 'group' && kind !== 'private') || id === '') return undefined
+    return { kind, id, key }
+  }
+
   /** 按 sessionId 查宿主里活着的 agent（用于避开"已被写句柄占用"的冲突）。 */
   private liveAgentFor(sessionId: string): Agent | undefined {
     try {
@@ -496,9 +506,14 @@ export class Bridge {
     this.opts.log('debug', '归档轮检查：待处理 ' + String(this.archivePending.size) + ' 个')
     for (const [key, pending] of [...this.archivePending]) {
       if (this.archiveRunning.has(key)) continue
-      const chat = this.chats.get(key)
-      if (chat === undefined) continue
-      const last = this.archiveLastActivity.get(key) ?? 0
+      // 重启后群里没人说话时 chats 里还没有这个会话——用 key 还原一个 ref 就够
+      const ref = this.chats.get(key)?.ref ?? this.chatRefFromKey(key)
+      if (ref === undefined) {
+        this.opts.log('warn', '归档轮跳过 ' + key + '：取不到会话标识')
+        continue
+      }
+      // 空闲基准：实时活动时间；没有就退回批次生成时间（重启场景）
+      const last = this.archiveLastActivity.get(key) ?? pending.preparedAt
       const idleFor = Date.now() - last
       if (idleFor < idleMs) {
         this.opts.log('debug', '归档轮等待空闲 ' + key + '：还需 ' + Math.ceil((idleMs - idleFor) / 1000) + ' 秒')
@@ -652,8 +667,20 @@ export class Bridge {
   /** 跑一轮归档：模型只读素材、只输出 JSON（顺带把长期条目写进 mnemon）。 */
   private async runArchiveTurn(key: string, pending: { path: string; count: number; from: number; to: number; preparedAt: number }): Promise<void> {
     const chat = this.chats.get(key)
-    if (chat === undefined) return
-    const handle = await this.openArchiveAgent(chat.cwd ?? process.cwd(), key)
+    const ref = chat?.ref ?? this.chatRefFromKey(key)
+    if (ref === undefined) {
+      this.opts.log('warn', '归档轮跳过 ' + key + '：取不到会话标识')
+      return
+    }
+    let cwd = chat?.cwd
+    if (cwd === undefined) {
+      try {
+        cwd = await this.cwdFor(ref)
+      } catch {
+        cwd = process.cwd()
+      }
+    }
+    const handle = await this.openArchiveAgent(cwd, key)
     if (handle === undefined) return
     this.archiveAgents.set(key, handle)
     const sessionId = String(handle.agent.session.id)
@@ -683,6 +710,7 @@ export class Bridge {
       if (misses >= 3) {
         this.archivePending.delete(key)
         this.archiveMiss.delete(key)
+        await this.mem.clearArchiveBatch(key)
         this.opts.log('warn', '归档连续 3 次失败，丢弃该批次（下次重新准备）: ' + key)
       }
       return
@@ -690,6 +718,7 @@ export class Bridge {
     this.archiveMiss.delete(key)
     this.archivePending.delete(key)
     await this.applyArchivePayload(key, pending, payload)
+    await this.mem.clearArchiveBatch(key)
   }
 
   /** 收集归档轮的输出（只对归档会话生效，不投递给 QQ）。 */

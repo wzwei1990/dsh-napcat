@@ -102,6 +102,8 @@ export declare class Bridge {
     private peopleFor;
     /** 从磁盘恢复遗留的待归档批次（进程重启/升级后不会丢）。 */
     private restoreArchivePending;
+    /** 从会话 key（group:123 / private:456）还原 ChatRef，用于重启后还没人说话时也能归档。 */
+    private chatRefFromKey;
     /** 按 sessionId 查宿主里活着的 agent（用于避开"已被写句柄占用"的冲突）。 */
     private liveAgentFor;
     /** 定时器：待归档批次 + 群空闲够了 → 起一轮独立归档（模型专门做这件事）。 */

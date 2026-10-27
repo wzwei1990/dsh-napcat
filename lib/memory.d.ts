@@ -128,6 +128,8 @@ export declare class MemoryStore {
     }>;
     /** 注入用：取某类评分最高的若干条文本。 */
     topTexts(chatKey: string, kind: MemoryKind, limit: number): Promise<string[]>;
+    /** 删除待归档批次文件（归档完成或放弃后调用，避免重启后重复处理）。 */
+    clearArchiveBatch(chatKey: string): Promise<void>;
     /** 读当前滚动摘要（单一版本；旧版 summary.jsonl 兜底取最后一段）。 */
     readSummary(chatKey: string): Promise<{
         text: string;

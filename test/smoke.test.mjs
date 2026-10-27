@@ -607,3 +607,26 @@ test('重启恢复：磁盘上的待归档批次能被扫描回来', async () =>
     rmSync(tmp, { recursive: true, force: true })
   }
 })
+test('归档批次：处理完清文件，重启后不再重复', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const tmp = mkdtempSync(join(tmpdir(), 'clearbatch-'))
+  try {
+    const store = new MemoryStore({
+      ctx: {}, root: tmp, spacePrefix: 'napcat-', backend: 'file',
+      recentLimit: 200, injectRecent: 20, injectMaxChars: 4000, log: () => undefined,
+    })
+    const dir = join(tmp, 'group-1')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'archive-pending.jsonl')
+    writeFileSync(file, JSON.stringify({ t: 1, nick: 'a', text: 'x' }) + '\n')
+    assert.ok(existsSync(file))
+    assert.equal((await store.listPendingArchives()).length, 1)
+    await store.clearArchiveBatch('group:1')
+    assert.ok(!existsSync(file))
+    assert.equal((await store.listPendingArchives()).length, 0)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
