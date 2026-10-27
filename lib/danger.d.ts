@@ -26,3 +26,19 @@ export declare function dangerRules(): Array<{
     word: string;
     category: string;
 }>;
+/**
+ * 生成"让模型来拒绝"的提示词。
+ *
+ * 注意：**不把用户原文塞进去**，只给危险类别 —— 避免模型被原始指令二次注入。
+ * @param hit 命中的危险类别
+ * @param template 可配置模板，支持 {category}
+ * @returns 交给一次性会话的提示词
+ */
+export declare function buildRefusalPrompt(hit: DangerHit, template?: string): string;
+/**
+ * 清洗模型给出的拒绝文案：单行、限长、去引号。
+ * @param text 模型输出
+ * @param maxChars 最大字数
+ * @returns 可直接发到群里的文本；空文本返回空串
+ */
+export declare function cleanRefusal(text: string, maxChars?: number): string;

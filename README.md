@@ -74,7 +74,11 @@ QQ 用户 <──回复──── NapCat <──动作(WS)────┘   �
 
 除内置规则外，可用 `dangerWords` 追加自定义词（包含即命中）。
 
-被拒时回一句可配置的话（`dangerReply`，默认「这类操作只允许管理员发起。」），**同一会话 10 分钟最多回一次**，避免刷屏。每次命中都记进 `memory/<群>/audit.jsonl`：
+被拒时**交给模型说一句幽默的拒绝**：插件起一个一次性会话（`napcat-refuse-<群>`），只喂「危险类别」、不给用户原文（防二次注入），要求 20 字内、不调工具；20 秒没出来就本条静默（不留固定文案）。
+
+**执行层始终不放行**——模型只负责说，插件负责拦。
+
+**同一会话 10 分钟最多回一次**，避免刷屏。每次命中都记进 `memory/<群>/audit.jsonl`：
 
 ```json
 {"at":1792738405000,"userId":"11470","nick":"路人","role":"member","word":"删除","category":"删除","decision":"rejected"}
@@ -408,7 +412,11 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `memorySpaces` | `'` | 手填空间 id（`group:<群号>=<id>`）；留空由模型首次使用时自动创建并登记 |
 | `memorySpacePrefix` | `napcat-` | 自动创建空间时的名字前缀 |
 | `memeNudgeAfter` | `2` | 连续几条回复没带表情就注入提醒一次（0=不提醒） |
-| `archiveEvery` | `50` | 归档节奏：攒够这么多条就让模型蒸馏一次（0=关闭） |`n| `archiveEventDays` | `45` | 事件类记忆保留天数（到期自动淡出） |`n| `dangerPolicy` | `admin-only` | 危险操作策略：admin-only=仅管理员可发起 / allow=谁都能发 / off=不拦截 |`n| `dangerWords` | `[]` | 额外危险词（包含即命中） |`n| `dangerReply` | `这类操作只允许管理员发起。` | 被拒时的回复文本 |
+| `archiveEvery` | `50` | 归档节奏：攒够这么多条就让模型蒸馏一次（0=关闭） |
+| `archiveEventDays` | `45` | 事件类记忆保留天数（到期自动淡出） |
+| `dangerPolicy` | `admin-only` | 危险操作策略：admin-only=仅管理员可发起 / allow=谁都能发 / off=不拦截 |
+| `dangerWords` | `[]` | 额外危险词（包含即命中） |
+| `dangerReplyPrompt` | （空） | 拒绝话术的提示词模板，支持 `{category}`；留空用内置 |
 | `archiveIdleMinutes` | `2` | 群空闲多少分钟后起一轮**独立归档**（模型专门跑，输出不进 QQ） |
 | `recentLimit` | `200` | 缓冲容量：保留多少条 = 预热补到多少条（含"最多存多少"与"补多少"两层含义；调小=少存少补） |
 | `injectRecent` | `20` | 每次触发注入最近对话条数（直接影响 token 成本） |

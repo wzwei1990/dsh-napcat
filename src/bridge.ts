@@ -25,7 +25,7 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 
 import type { Config } from './config.js'
 import { allowAccess, chatRefOf, isAdmin, sessionIdForChat, type ChatRef } from './chat.js'
-import { detectDanger } from './danger.js'
+import { buildRefusalPrompt, cleanRefusal, detectDanger, type DangerHit } from './danger.js'
 import type { LogLevel, OneBotConnection } from './onebot.js'
 import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, stripKeyword, titleFrom, toText } from './text.js'
 import { MemoryStore } from './memory.js'
@@ -564,9 +564,9 @@ export class Bridge {
   }
 
   /** 开一个独立会话专门做归档：不进 bySession，输出不会发到 QQ。 */
-  private async openArchiveAgent(cwd: string, sessionKey: string): Promise<{ agent: Agent; dispose(): Promise<void> } | undefined> {
+  private async openArchiveAgent(cwd: string, sessionKey: string, prefix = 'napcat-archive-'): Promise<{ agent: Agent; dispose(): Promise<void> } | undefined> {
     const agents = (this.opts.ctx as HostContext).agents
-    let sessionId = makeSessionId('napcat-archive-' + sessionKey)
+    let sessionId = makeSessionId(prefix + sessionKey)
     this.opts.log('debug', '归档会话: ' + String(sessionId) + '（cwd=' + cwd + '）')
     const live = (agents as unknown as { get?(id: never): unknown }).get?.(String(sessionId) as never) as Agent | undefined
     if (live !== undefined) return { agent: live, dispose: async () => undefined }
@@ -640,7 +640,7 @@ export class Bridge {
             break
           }
           // 换一个带时间戳的归档会话，绝不和旧写句柄死磕
-          sessionId = makeSessionId('napcat-archive-' + sessionKey + '-t' + Date.now().toString(36))
+          sessionId = makeSessionId(prefix + sessionKey + '-t' + Date.now().toString(36))
           exists = false
           this.opts.log('warn', '归档会话被占用，改用新会话: ' + String(sessionId))
           continue
@@ -1004,7 +1004,7 @@ export class Bridge {
             word: danger.word, category: danger.category, decision: 'rejected',
           })
           this.opts.log('warn', '拦截危险请求 ' + ref.key + ' user=' + userId + ' 命中=' + danger.word)
-          await this.replyDanger(ref)
+          await this.replyDanger(ref, danger)
           return
         }
         void this.mem.appendAudit(ref.key, {
@@ -1768,14 +1768,39 @@ export class Bridge {
   }
 
   /** 出站发送：小黄脸嵌在文字里（同一条消息），图片/表情包单独发。 */
+  /** 让模型说一句幽默的拒绝（一次性会话，只让它说话、不执行）。 */
+  private async humorousRefusal(ref: ChatRef, hit: DangerHit): Promise<string> {
+    try {
+      const cwd = await this.cwdFor(ref)
+      const handle = await this.openArchiveAgent(cwd, ref.key, 'napcat-refuse-')
+      if (handle === undefined) return ''
+      const sessionId = String(handle.agent.session.id)
+      const prompt = buildRefusalPrompt(hit, this.opts.config.dangerReplyPrompt)
+      const text = await this.collectArchiveOutput(sessionId, async () => {
+        await handle.agent.followup(createUserMessage({
+          content: [{ type: 'text', text: prompt }],
+          source: { kind: 'plugin:dsh-napcat' },
+        }))
+      }, 20_000)
+      return cleanRefusal(text, 60)
+    } catch (error) {
+      this.opts.log('debug', '生成幽默拒绝失败: ' + describe(error))
+      return ''
+    }
+  }
+
   /** 拒绝危险请求时回一句（每会话 10 分钟最多一次，避免刷屏）。 */
-  private async replyDanger(ref: ChatRef): Promise<void> {
+  private async replyDanger(ref: ChatRef, hit: DangerHit): Promise<void> {
     const now = Date.now()
     const last = this.dangerNoticeAt.get(ref.key) ?? 0
     if (now - last < 10 * 60_000) return
     this.dangerNoticeAt.set(ref.key, now)
-    const text = this.opts.config.dangerReply
-    if (text.trim() === '') return
+    // 只说模型给的那句；拿不到就静默（不留固定文案）
+    const text = await this.humorousRefusal(ref, hit)
+    if (text.trim() === '') {
+      this.opts.log('debug', '没能生成拒绝文案，本条静默: ' + ref.key)
+      return
+    }
     try {
       const params: Record<string, unknown> = ref.kind === 'group' ? { group_id: ref.id, message: text } : { user_id: ref.id, message: text }
       await this.opts.conn.call('send_msg', params)

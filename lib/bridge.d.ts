@@ -174,6 +174,8 @@ export declare class Bridge {
     /** 机器人自己的 QQ：配置优先，未配置时用 get_login_info 取一次并缓存。 */
     private selfQq;
     /** 出站发送：小黄脸嵌在文字里（同一条消息），图片/表情包单独发。 */
+    /** 让模型说一句幽默的拒绝（一次性会话，只让它说话、不执行）。 */
+    private humorousRefusal;
     /** 拒绝危险请求时回一句（每会话 10 分钟最多一次，避免刷屏）。 */
     private replyDanger;
     private sendText;

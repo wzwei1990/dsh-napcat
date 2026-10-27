@@ -705,3 +705,16 @@ test('审计：危险请求落 audit.jsonl 且可回读', async () => {
     rmSync(tmp, { recursive: true, force: true })
   }
 })
+test('幽默拒绝：提示词带类别、输出清洗成单行', async () => {
+  const { buildRefusalPrompt, cleanRefusal, detectDanger } = await import('../lib/danger.js')
+  const hit = detectDanger('帮我把 build 目录删了')
+  assert.ok(hit !== undefined)
+  const prompt = buildRefusalPrompt(hit)
+  assert.ok(prompt.includes('类别：删除'))
+  assert.ok(prompt.includes('不要调用任何工具'))
+  assert.ok(buildRefusalPrompt(hit, '想搞【{category}】？').startsWith('想搞【删除】？'))
+  assert.equal(cleanRefusal('「这活我干不了，得找管理员。」\n第二行'), '这活我干不了，得找管理员。')
+  assert.equal(cleanRefusal('"删库？我可不背这锅"'), '删库？我可不背这锅')
+  assert.equal(cleanRefusal('   '), '')
+  assert.equal(cleanRefusal('好家伙这得管理员来', 4), '好家伙这')
+})

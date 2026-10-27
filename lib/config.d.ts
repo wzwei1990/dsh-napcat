@@ -21,8 +21,8 @@ export interface Config {
     dangerPolicy: 'admin-only' | 'allow' | 'off';
     /** 额外危险词（包含即命中）。 */
     dangerWords: string[];
-    /** 拒绝时的回复文本。 */
-    dangerReply: string;
+    /** 让模型说拒绝时的开场句模板，支持 {category}；留空用内置。 */
+    dangerReplyPrompt: string;
     /** 私聊策略：admin=仅管理员；open=任何人；disabled=关闭。 */
     dmPolicy: 'admin' | 'open' | 'disabled';
     /** dmPolicy=open 时的额外白名单（留空=不限）。 */

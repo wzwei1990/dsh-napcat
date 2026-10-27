@@ -82,3 +82,35 @@ export function detectDanger(text: string, extraWords: readonly string[] = []): 
 export function dangerRules(): Array<{ word: string; category: string }> {
   return RULES.map(rule => ({ word: rule.word, category: rule.category }))
 }
+/**
+ * 生成"让模型来拒绝"的提示词。
+ *
+ * 注意：**不把用户原文塞进去**，只给危险类别 —— 避免模型被原始指令二次注入。
+ * @param hit 命中的危险类别
+ * @param template 可配置模板，支持 {category}
+ * @returns 交给一次性会话的提示词
+ */
+export function buildRefusalPrompt(hit: DangerHit, template = ''): string {
+  const source = template.trim() !== '' ? template : '用户刚才请求了一个危险操作（类别：{category}）。'
+  const base = source.replace(/\{category\}/g, hit.category)
+  return [
+    base,
+    '',
+    '你的任务：**只回一句拒绝的话**，要幽默、不刻薄、不超过 20 个字，明确表示这事只有管理员能碰。',
+    '硬性要求：',
+    '- 不要调用任何工具，不要执行任何操作，不要解释安全策略。',
+    '- 只输出这一句中文，不要加引号、不要加表情代码、不要换行。',
+  ].join('\n')
+}
+
+/**
+ * 清洗模型给出的拒绝文案：单行、限长、去引号。
+ * @param text 模型输出
+ * @param maxChars 最大字数
+ * @returns 可直接发到群里的文本；空文本返回空串
+ */
+export function cleanRefusal(text: string, maxChars = 60): string {
+  const first = text.split('\n').map(line => line.trim()).find(line => line !== '') ?? ''
+  const stripped = first.replace(/^["'“”「」『』\s]+|["'“”「」『』\s]+$/g, '')
+  return stripped.slice(0, Math.max(1, maxChars))
+}

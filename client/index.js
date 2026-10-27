@@ -40,7 +40,7 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'adminUsers', label: '管理员 QQ（逗号分隔）', kind: 'list' },
         { key: 'dangerPolicy', label: '危险操作策略（删除/删库/强推/格式化/清空记忆等）', kind: 'select', options: [['admin-only', 'admin-only：仅管理员可发起'], ['allow', 'allow：谁都能发'], ['off', 'off：不拦截']] },
         { key: 'dangerWords', label: '额外危险词（逗号分隔，包含即命中）', kind: 'list' },
-        { key: 'dangerReply', label: '危险请求被拒时的回复', kind: 'text' },
+        { key: 'dangerReplyPrompt', label: '拒绝话术的提示词模板（支持 {category}，留空用内置）', kind: 'text' },
         { key: 'dmPolicy', label: '私聊策略', kind: 'select', options: [['admin', 'admin：仅管理员'], ['open', 'open：任何人'], ['disabled', 'disabled：关闭']] },
         { key: 'allowFrom', label: '私聊额外白名单（逗号分隔，留空=不限）', kind: 'list' },
         { key: 'groupPolicy', label: '群聊策略', kind: 'select', options: [['allowlist', 'allowlist：仅白名单群'], ['open', 'open：任何群'], ['disabled', 'disabled：关闭']] },
