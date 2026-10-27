@@ -1,6 +1,6 @@
 /** 群/私聊记忆：一群一目录隔离 + 最近消息缓冲；长期记忆走 mnemon（失败则落本地 notes.md）。 */
 
-import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, rename, stat as fsStat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { mergeItem, pruneItems, topItems, type MemoryItem, type MemoryKind } from './memscore.js'
 
@@ -435,6 +435,51 @@ export class MemoryStore {
   }
 
   // ── 归档：把冷历史蒸馏成摘要 / 人物卡（三层记忆的"温层"）───────────────
+
+  /** 扫描磁盘上遗留的待归档批次（进程重启后恢复用）。 */
+  async listPendingArchives(): Promise<Array<{ chatKey: string; path: string; count: number; from: number; to: number; preparedAt: number }>> {
+    const out: Array<{ chatKey: string; path: string; count: number; from: number; to: number; preparedAt: number }> = []
+    let dirs: string[] = []
+    try {
+      const { readdirSync } = await import('node:fs')
+      dirs = readdirSync(this.opts.root, { withFileTypes: true })
+        .filter(entry => entry.isDirectory())
+        .map(entry => entry.name)
+    } catch {
+      return out
+    }
+    for (const name of dirs) {
+      // 目录名 → chatKey：group-123 → group:123
+      const chatKey = name.replace('-', ':')
+      const path = join(this.opts.root, name, ARCHIVE_BATCH_FILE)
+      try {
+        const info = await fsStat(path)
+        const raw = await readFile(path, 'utf8')
+        const rows: Array<{ t: number }> = []
+        for (const line of raw.split('\n')) {
+          if (line.trim() === '') continue
+          try {
+            const parsed = JSON.parse(line) as { t?: number }
+            if (typeof parsed.t === 'number') rows.push({ t: parsed.t })
+          } catch {
+            // 坏行跳过
+          }
+        }
+        if (rows.length === 0) continue
+        out.push({
+          chatKey,
+          path,
+          count: rows.length,
+          from: rows[0]?.t ?? 0,
+          to: rows[rows.length - 1]?.t ?? 0,
+          preparedAt: info.mtimeMs,
+        })
+      } catch {
+        // 没有批次文件
+      }
+    }
+    return out
+  }
 
   /** 归档状态：已处理到哪条消息（时间戳）与上次归档时间。 */
   async archiveState(chatKey: string): Promise<{ archivedUpTo: number; lastAt: number }> {

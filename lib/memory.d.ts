@@ -79,6 +79,15 @@ export declare class MemoryStore {
     recentCount(chatKey: string): Promise<number>;
     /** 读最近 N 条，返回「昵称: 内容」行。 */
     readRecent(chatKey: string, limit?: number): Promise<string[]>;
+    /** 扫描磁盘上遗留的待归档批次（进程重启后恢复用）。 */
+    listPendingArchives(): Promise<Array<{
+        chatKey: string;
+        path: string;
+        count: number;
+        from: number;
+        to: number;
+        preparedAt: number;
+    }>>;
     /** 归档状态：已处理到哪条消息（时间戳）与上次归档时间。 */
     archiveState(chatKey: string): Promise<{
         archivedUpTo: number;

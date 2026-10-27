@@ -120,11 +120,11 @@ export class Bridge {
     this.sessionEventOff = this.opts.ctx.on('session/event', (session: Session, event: SessionEvent) => {
       this.onSessionEvent(session, event)
     })
-    // 归档定时器：每秒轮询太浪费，60 秒一次足够（空闲 2 分钟才真正开跑）
+    // 归档定时器：60 秒检查一次。不 unref（进程常驻，unref 只影响退出，别让定时器变成孤儿）
     this.archiveTimer = setInterval(() => { void this.archiveTick() }, 60_000)
-    if (typeof this.archiveTimer === 'object' && typeof (this.archiveTimer as { unref?: () => void }).unref === 'function') {
-      (this.archiveTimer as { unref: () => void }).unref()
-    }
+    setTimeout(() => { void this.archiveTick() }, 5_000)
+    void this.restoreArchivePending()
+    this.opts.log('info', '归档定时器已启动（每 60 秒检查；群空闲 ' + String(this.opts.config.archiveIdleMinutes) + ' 分钟后执行）')
     this.opts.log('info', '桥已就绪（每个 QQ 会话一个 agent）')
   }
 
@@ -455,19 +455,54 @@ export class Bridge {
     }
   }
 
+  /** 从磁盘恢复遗留的待归档批次（进程重启/升级后不会丢）。 */
+  private async restoreArchivePending(): Promise<void> {
+    try {
+      const rows = await this.mem.listPendingArchives()
+      let restored = 0
+      for (const row of rows) {
+        if (this.archivePending.has(row.chatKey)) continue
+        this.archivePending.set(row.chatKey, {
+          path: row.path,
+          count: row.count,
+          from: row.from,
+          to: row.to,
+          preparedAt: row.preparedAt,
+        })
+        restored += 1
+      }
+      if (restored > 0) this.opts.log('info', '恢复待归档批次 ' + String(restored) + ' 个（重启前遗留）')
+    } catch (error) {
+      this.opts.log('debug', '恢复归档批次失败: ' + describe(error))
+    }
+  }
+
   /** 定时器：待归档批次 + 群空闲够了 → 起一轮独立归档（模型专门做这件事）。 */
   private async archiveTick(): Promise<void> {
     if (!this.opts.config.memoryEnabled || this.opts.config.archiveEvery === 0) return
     const idleMs = Math.max(0, this.opts.config.archiveIdleMinutes) * 60_000
+    if (this.archivePending.size === 0) return
+    this.opts.log('debug', '归档轮检查：待处理 ' + String(this.archivePending.size) + ' 个')
     for (const [key, pending] of [...this.archivePending]) {
       if (this.archiveRunning.has(key)) continue
       const chat = this.chats.get(key)
       if (chat === undefined) continue
       const last = this.archiveLastActivity.get(key) ?? 0
-      if (Date.now() - last < idleMs) continue
+      const idleFor = Date.now() - last
+      if (idleFor < idleMs) {
+        this.opts.log('debug', '归档轮等待空闲 ' + key + '：还需 ' + Math.ceil((idleMs - idleFor) / 1000) + ' 秒')
+        continue
+      }
       this.archiveRunning.add(key)
+      this.opts.log('info', '归档轮开始 ' + key + '：' + pending.count + ' 条（已空闲 ' + Math.round(idleFor / 1000) + ' 秒）')
       try {
-        await this.runArchiveTurn(key, pending)
+        // 整体兜底超时：卡住也不会永远占着 running 标记
+        await Promise.race([
+          this.runArchiveTurn(key, pending),
+          new Promise<void>((_resolve, reject) => {
+            setTimeout(() => reject(new Error('归档轮超时（240s）')), 240_000)
+          }),
+        ])
       } catch (error) {
         this.opts.log('warn', '归档轮失败: ' + key + ' — ' + describe(error))
       } finally {
@@ -503,6 +538,7 @@ export class Bridge {
   private async openArchiveAgent(cwd: string, sessionKey: string): Promise<{ agent: Agent; dispose(): Promise<void> } | undefined> {
     const agents = (this.opts.ctx as HostContext).agents
     const sessionId = makeSessionId('napcat-archive-' + sessionKey)
+    this.opts.log('debug', '归档会话: ' + String(sessionId) + '（cwd=' + cwd + '）')
     const live = (agents as unknown as { get?(id: never): unknown }).get?.(String(sessionId) as never) as Agent | undefined
     if (live !== undefined) return { agent: live, dispose: async () => undefined }
     const defaultModel = (this.opts.ctx as unknown as {

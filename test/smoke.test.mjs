@@ -583,3 +583,27 @@ test('新分类：偏好/氛围/待办/事件入库并注入，过期待办自�
     rmSync(tmp, { recursive: true, force: true })
   }
 })
+test('重启恢复：磁盘上的待归档批次能被扫描回来', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const tmp = mkdtempSync(join(tmpdir(), 'restore-'))
+  try {
+    const store = new MemoryStore({
+      ctx: {}, root: tmp, spacePrefix: 'napcat-', backend: 'file',
+      recentLimit: 200, injectRecent: 20, injectMaxChars: 4000, log: () => undefined,
+    })
+    const dir = join(tmp, 'group-660610917')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'archive-pending.jsonl'),
+      JSON.stringify({ t: 1000, nick: 'a', text: 'x' }) + '\n' + JSON.stringify({ t: 2000, nick: 'b', text: 'y' }) + '\n')
+    const list = await store.listPendingArchives()
+    assert.equal(list.length, 1)
+    assert.equal(list[0].chatKey, 'group:660610917')
+    assert.equal(list[0].count, 2)
+    assert.equal(list[0].from, 1000)
+    assert.equal(list[0].to, 2000)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
