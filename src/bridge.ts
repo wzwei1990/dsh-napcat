@@ -477,6 +477,17 @@ export class Bridge {
     }
   }
 
+  /** 按 sessionId 查宿主里活着的 agent（用于避开"已被写句柄占用"的冲突）。 */
+  private liveAgentFor(sessionId: string): Agent | undefined {
+    try {
+      const agents = (this.opts.ctx as unknown as { agents?: { get?(id: never): unknown } }).agents
+      const live = agents?.get?.(String(sessionId) as never)
+      return live === undefined || live === null ? undefined : live as Agent
+    } catch {
+      return undefined
+    }
+  }
+
   /** 定时器：待归档批次 + 群空闲够了 → 起一轮独立归档（模型专门做这件事）。 */
   private async archiveTick(): Promise<void> {
     if (!this.opts.config.memoryEnabled || this.opts.config.archiveEvery === 0) return
@@ -537,7 +548,7 @@ export class Bridge {
   /** 开一个独立会话专门做归档：不进 bySession，输出不会发到 QQ。 */
   private async openArchiveAgent(cwd: string, sessionKey: string): Promise<{ agent: Agent; dispose(): Promise<void> } | undefined> {
     const agents = (this.opts.ctx as HostContext).agents
-    const sessionId = makeSessionId('napcat-archive-' + sessionKey)
+    let sessionId = makeSessionId('napcat-archive-' + sessionKey)
     this.opts.log('debug', '归档会话: ' + String(sessionId) + '（cwd=' + cwd + '）')
     const live = (agents as unknown as { get?(id: never): unknown }).get?.(String(sessionId) as never) as Agent | undefined
     if (live !== undefined) return { agent: live, dispose: async () => undefined }
@@ -588,20 +599,45 @@ export class Bridge {
         exists = false
       }
     }
-    if (exists) {
-      try {
-        handle = await agents.resume({ resumeSessionId: sessionId, agentOptions, setup })
-      } catch {
-        handle = undefined
+    const ownedByOther = (error: unknown): boolean => /already owned by an active write handle/i.test(describe(error))
+    for (let attempt = 1; handle === undefined && attempt <= 3; attempt += 1) {
+      const live = this.liveAgentFor(String(sessionId))
+      if (live !== undefined) {
+        handle = { agent: live, dispose: async () => undefined }
+        break
       }
-    }
-    if (handle === undefined) {
       try {
-        handle = await agents.create({ sessionId, meta, agentOptions, setup })
+        if (exists) {
+          handle = await agents.resume({ resumeSessionId: sessionId, agentOptions, setup })
+        } else {
+          this.opts.log('debug', '归档会话 create: ' + String(sessionId))
+          handle = await agents.create({ sessionId, meta, agentOptions, setup })
+        }
       } catch (error) {
+        if (ownedByOther(error)) {
+          await new Promise(resolve => setTimeout(resolve, 400))
+          const late = this.liveAgentFor(String(sessionId))
+          if (late !== undefined) {
+            handle = { agent: late, dispose: async () => undefined }
+            break
+          }
+          // 换一个带时间戳的归档会话，绝不和旧写句柄死磕
+          sessionId = makeSessionId('napcat-archive-' + sessionKey + '-t' + Date.now().toString(36))
+          exists = false
+          this.opts.log('warn', '归档会话被占用，改用新会话: ' + String(sessionId))
+          continue
+        }
+        if (exists) {
+          exists = false
+          continue
+        }
         this.opts.log('warn', '归档会话创建失败: ' + describe(error))
         return undefined
       }
+    }
+    if (handle === undefined) {
+      this.opts.log('warn', '归档会话多次创建失败，跳过本轮')
+      return undefined
     }
     try {
       await handle.agent.whenIdle()
@@ -1234,35 +1270,65 @@ export class Bridge {
 
     let created = true
     if (handle === undefined) {
-    // 照 dsh-onebot：先用 sessionPersistence.stat 探测是否已有持久化日志，避免 create 抛错
-    let exists = false
-    const persistence = (this.opts.ctx as unknown as {
-      sessionPersistence?: { stat?(id: unknown): Promise<object | undefined> }
-    }).sessionPersistence
-    if (persistence?.stat !== undefined) {
-      try {
-        exists = (await persistence.stat(sessionId)) !== undefined
-      } catch {
-        exists = false
+      // 照 dsh-onebot：先用 sessionPersistence.stat 探测是否已有持久化日志，避免 create 抛错
+      let exists = false
+      const persistence = (this.opts.ctx as unknown as {
+        sessionPersistence?: { stat?(id: unknown): Promise<object | undefined> }
+      }).sessionPersistence
+      if (persistence?.stat !== undefined) {
+        try {
+          exists = (await persistence.stat(sessionId)) !== undefined
+        } catch {
+          exists = false
+        }
       }
-    }
-    if (exists) {
-      try {
-        created = false
-        handle = await agents.resume({ resumeSessionId: sessionId, agentOptions, setup })
-      } catch (error) {
-        this.opts.log('warn', '预检到日志但 resume 失败，改 create: ' + describe(error))
-        created = true
-        exists = false
-        handle = await agents.create({ sessionId, meta, agentOptions, setup })
+      // 冲突（同一 session 已被别的活跃写句柄占用）时：先尝试复用活着的 agent，再换确定性新后缀
+      const ownedByOther = (error: unknown): boolean => /already owned by an active write handle/i.test(describe(error))
+      for (let attempt = 1; handle === undefined && attempt <= 3; attempt += 1) {
+        const live = this.liveAgentFor(String(sessionId))
+        if (live !== undefined) {
+          handle = { agent: live, dispose: async () => undefined }
+          created = false
+          this.opts.log('info', '复用已存在的 agent: ' + String(sessionId))
+          break
+        }
+        try {
+          if (exists) {
+            created = false
+            handle = await agents.resume({ resumeSessionId: sessionId, agentOptions, setup })
+          } else {
+            created = true
+            handle = await agents.create({ sessionId, meta, agentOptions, setup })
+          }
+        } catch (error) {
+          if (ownedByOther(error)) {
+            // 写持有者存在但拿不到 agent（可能刚被别的路径建好）：等一下再看一次
+            await new Promise(resolve => setTimeout(resolve, 400))
+            const late = this.liveAgentFor(String(sessionId))
+            if (late !== undefined) {
+              handle = { agent: late, dispose: async () => undefined }
+              created = false
+              break
+            }
+            // 仍是别人的：换一个确定性新会话，别死磕
+            const base = sessionIdForChat(ref.key) + cwdTag
+            const next = attempt + (Number(this.sessionSuffixes.get(ref.key)?.replace(/^x/, '') ?? 0) || 0)
+            this.sessionSuffixes.set(ref.key, 'x' + next)
+            sessionId = makeSessionId(base + '-x' + next)
+            exists = false
+            this.opts.log('warn', '会话被活跃写句柄占用，改用新会话: ' + String(sessionId))
+            continue
+          }
+          if (exists) {
+            // 有日志但 resume 失败（格式/版本问题）→ 改 create
+            this.opts.log('warn', '预检到日志但 resume 失败，改 create: ' + describe(error))
+            exists = false
+            continue
+          }
+          throw error
+        }
       }
-    } else try {
-      handle = await agents.create({ sessionId, meta, agentOptions, setup })
-    } catch (error) {
-      this.opts.log('warn', '创建会话失败（多半是同 id 已有持久化日志），改用 resume: ' + describe(error))
-      created = false
-      handle = await agents.resume({ resumeSessionId: sessionId, agentOptions, setup })
-    }
+      if (handle === undefined) throw new Error('会话获取失败（多次重试）')
     }
 
     // 照 dsh-onebot：create/resume 后必须等 agent 就绪（whenIdle）再投递消息，

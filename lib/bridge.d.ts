@@ -102,6 +102,8 @@ export declare class Bridge {
     private peopleFor;
     /** 从磁盘恢复遗留的待归档批次（进程重启/升级后不会丢）。 */
     private restoreArchivePending;
+    /** 按 sessionId 查宿主里活着的 agent（用于避开"已被写句柄占用"的冲突）。 */
+    private liveAgentFor;
     /** 定时器：待归档批次 + 群空闲够了 → 起一轮独立归档（模型专门做这件事）。 */
     private archiveTick;
     /** 攒够 archiveEvery 条就准备批次（真正执行由 archiveTick 起独立轮）。 */
