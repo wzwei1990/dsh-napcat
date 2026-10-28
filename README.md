@@ -26,7 +26,7 @@ QQ 用户 <──回复──── NapCat <──动作(WS)────┘   �
 | 分组 | 每个聊天自动建一个 **工作区**（侧边栏 `群 1103089802` / `私聊 1000001`）并挂载会话 |
 | 标题 | 首条消息时把会话标题写成 `MM-DD HH:mm` |
 | 记忆 | **群记忆**：每群一个 mnemon 记忆空间（设定/黑话/人物/事实四层）+ 最近消息缓冲（默认 200 条）+ 历史预热；模型自动捕获与更新，无需用户命令 |
-| 图片缓存 | `imageCache: all` 时把群里的图片/表情包也落盘（`<cwd>/napcat-inbox/imgs/<日期>/`），聊天记录里写成 `[图片:<文件名>]`，之后可 `read_image` 回看；带每日配额/单张上限/过期清理 |`n| 主动发言 | **伪人模式**（默认关闭）：群里有话题时按泊松概率自己插一句，接上一句不跑题，没话说自动闭嘴（`__SKIP__`） |
+| 图片缓存 | `imageCache: all`（默认）时把群里的图片/表情包也落盘（`<cwd>/napcat-inbox/imgs/<日期>/`），聊天记录里写成 `[图片:<文件名>]`，之后可 `read_image` 回看；带每日配额/单张上限/过期清理 |`n| 主动发言 | **伪人模式**（默认关闭）：群里有话题时按泊松概率自己插一句，接上一句不跑题，没话说自动闭嘴（`__SKIP__`） |
 | 性格 | 群 / 人性格：`personaOverrides`（`group:<群号>=人设` / `private:<QQ>=人设`），按会话注入 systemPrompt；只影响语气，不复述设定 |
 | 图片（收） | **原生送达**：下载到 `<会话cwd>/napcat-inbox/` → `attachments.admitPromptContent` → `ImageBlock` 进模型请求（视觉模型直接看图）；同时保留 `[图片: <路径>]` 文本兜底 |
 | 文件（收） | 私聊三级兜底：`get_private_file_url` → `get_file` 的 base64 → `get_file` 的 http url；远端 NapCat 只给本机路径时给出明确原因 |
@@ -176,7 +176,7 @@ QQ 侧的表情来自 dsh-meme 图库（`~/.dsh/meme-packs` + 插件内置示例
 群里大量的**表情包 / 分享图**默认不会落盘（只有叫到机器人时才下载）。开启缓存后可以留档：
 
 ```yaml
-imageCache: all                 # off=只存叫到机器人时的图（默认）；all=群里的图也存
+imageCache: all                 # 默认 all=群里的图也存（机器人才能读图）；off=只存叫到机器人时的图
 imageCacheMaxBytes: 2097152     # 单张 ≤ 2MB
 imageCacheDailyCap: 100         # 每个聊天每天最多 100 张
 imageCacheRetentionDays: 7      # 超期目录自动清理
@@ -445,7 +445,7 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `warmupImages` | `true` | 预热时也缓存历史消息里的图片（file id 失效则记 `[图片(已过期)]`） |
 | `warmupImageLimit` | `30` | 单次预热最多下载几张历史图片 |
 | `warmupStaleMinutes` | `10` | 缓冲最新一条超过多少分钟视为过期、需要重新预热 |
-| `imageCache` | `off` | 群聊图片缓存：`all`=把群里的图片/表情包也落盘（默认只在叫到机器人时存） |
+| `imageCache` | `all` | 群聊图片缓存：`all`=把群里的图片/表情包也落盘（**默认开启，否则机器人无图可读**）；`off`=只在叫到机器人时存 |
 | `imageCacheMaxBytes` | `2097152` | 单张图片缓存上限（2MB） |
 | `imageCacheDailyCap` | `100` | 每个聊天每天最多缓存张数 |
 | `imageCacheRetentionDays` | `7` | 图片缓存保留天数（超期自动清理） |
