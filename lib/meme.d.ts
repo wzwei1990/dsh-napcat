@@ -8,7 +8,15 @@ export interface MemeHit {
     /** 所属包目录 */
     pack: string;
 }
-/** 默认扫描位置（DSH_HOME 下的 profile 里装的 dsh-meme）。 */
+/**
+ * 默认扫描位置（全部一起搜，命中后按 caption+tag 去重）。
+ *
+ * 1. `<DSH_HOME>/meme-packs` —— dsh-meme 真正的图库根目录（设置页「图库目录」指向它，
+ *    用户新增/下载的包都落在这里）；
+ * 2. `profiles/<name>/node_modules/dsh-meme/memes` —— 插件包内自带的示例包（老布局兜底）。
+ *
+ * 旧实现只扫第 2 种，所以用户后加的包永远读不到。
+ */
 export declare function defaultMemeDirs(dshHome: string): string[];
 export declare class MemeLibrary {
     private readonly dirs;

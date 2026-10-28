@@ -718,3 +718,22 @@ test('幽默拒绝：提示词带类别、输出清洗成单行', async () => {
   assert.equal(cleanRefusal('   '), '')
   assert.equal(cleanRefusal('好家伙这得管理员来', 4), '好家伙这')
 })
+test('表情图库：用户 meme-packs 与内置包一起搜（按 caption+tag 去重）', async () => {
+  const { mkdtempSync, mkdirSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { defaultMemeDirs } = await import('../lib/meme.js')
+  const home = mkdtempSync(join(tmpdir(), 'memehome-'))
+  try {
+    const builtin = join(home, 'profiles', 'web', 'node_modules', 'dsh-meme', 'memes')
+    mkdirSync(builtin, { recursive: true })
+    // 只有内置包时：扫内置
+    assert.deepEqual(defaultMemeDirs(home), [builtin])
+    // 有用户图库时：两个都扫，用户图库在前
+    const userRoot = join(home, 'meme-packs')
+    mkdirSync(userRoot, { recursive: true })
+    assert.deepEqual(defaultMemeDirs(home), [userRoot, builtin])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
