@@ -8,14 +8,30 @@ export interface MemeHit {
     /** 所属包目录 */
     pack: string;
 }
+/** dsh-meme 的设置文件内容（只读它关心的两项）。 */
+export interface MemeSettings {
+    /** 自定义图库根目录（设置页「图库目录」） */
+    packsDir?: string;
+    /** 显式勾选启用的包 id；用户没拨过开关时为空 */
+    enabledPacks?: string[];
+}
+/** dsh-meme 的 home（它用 os.homedir()，可用 DSH_MEME_HOME 覆盖）。 */
+export declare function memeHomeDir(): string;
+/**
+ * 读 dsh-meme 的设置（`<memeHome>/.dsh/dsh-expression.json`）。
+ *
+ * 图库根目录与「启用了哪几个包」都以这份设置为准，否则会和 Web 面板显示不一致
+ * （线上曾出现面板 3 个包、插件只扫到内置 24 张的情况）。
+ */
+export declare function readMemeSettings(): MemeSettings;
 /**
  * 默认扫描位置（全部一起搜，命中后按 caption+tag 去重）。
  *
- * 1. `<DSH_HOME>/meme-packs` —— dsh-meme 真正的图库根目录（设置页「图库目录」指向它，
- *    用户新增/下载的包都落在这里）；
- * 2. `profiles/<name>/node_modules/dsh-meme/memes` —— 插件包内自带的示例包（老布局兜底）。
+ * 1. dsh-meme 的设置里指定的 `packsDir`，否则 `<memeHome>/.dsh/meme-packs`；
+ * 2. `<DSH_HOME>/meme-packs`（有些部署 DSH_HOME 与 home 不同）；
+ * 3. `profiles/<name>/node_modules/dsh-meme/memes` —— 插件包内自带的示例包（兜底）。
  *
- * 旧实现只扫第 2 种，所以用户后加的包永远读不到。
+ * 旧实现只扫第 3 种，所以用户后加的包永远读不到。
  */
 export declare function defaultMemeDirs(dshHome: string): string[];
 export declare class MemeLibrary {
@@ -23,12 +39,16 @@ export declare class MemeLibrary {
     private readonly log;
     /** 缓存有效期（毫秒）：到期重扫图库，新加的包最多这么久后自动生效。 */
     private readonly ttlMs;
+    /** 只读这些包（dsh-meme 设置里显式勾选的 enabledPacks；空/未给则全部读）。 */
+    private readonly allowedPacks?;
     /** 每个根目录的缓存行 + 读取时间（TTL 到了重扫，新加的包不用重启）。 */
     private readonly loaded;
     private readonly missing;
     constructor(dirs: string[], log?: (level: string, message: string) => void, 
     /** 缓存有效期（毫秒）：到期重扫图库，新加的包最多这么久后自动生效。 */
-    ttlMs?: number);
+    ttlMs?: number, 
+    /** 只读这些包（dsh-meme 设置里显式勾选的 enabledPacks；空/未给则全部读）。 */
+    allowedPacks?: readonly string[] | undefined);
     /** 读取一个图库根目录下所有包的 memes 行。 */
     private rowsOf;
     /**

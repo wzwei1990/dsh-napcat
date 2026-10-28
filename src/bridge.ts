@@ -32,7 +32,7 @@ import { MemoryStore } from './memory.js'
 import { ImageCache } from './imagecache.js'
 import { buildArchivePrompt, parseArchivePayload, type ArchivePayload } from './archive.js'
 import { faceFor } from './faces.js'
-import { defaultMemeDirs, MemeLibrary } from './meme.js'
+import { defaultMemeDirs, MemeLibrary, readMemeSettings } from './meme.js'
 import { localToBase64Url } from './media.js'
 import { decide, newChatState, parseQuietHours, pruneSentAt, type ChatProactiveState } from './proactive.js'
 import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, base64UrlToBuffer, downloadToFile, ensureInbox, imageMediaType, nameFromRef } from './media.js'
@@ -2094,8 +2094,9 @@ export class Bridge {
       .map(part => normalizePath(part))
       .filter(part => part !== '')
     const dshHome = (process.env.DSH_HOME ?? '').trim() !== '' ? normalizePath(process.env.DSH_HOME ?? '') : join(homedir(), '.dsh')
+    const settings = readMemeSettings()   // dsh-meme 的图库根目录 / 启用的包以它为准
     const dirs = configured.length > 0 ? configured : defaultMemeDirs(dshHome)
-    this.memeLibrary = new MemeLibrary(dirs, (level, message) => this.opts.log(level as LogLevel, message))
+    this.memeLibrary = new MemeLibrary(dirs, (level, message) => this.opts.log(level as LogLevel, message), 60_000, settings.enabledPacks)
     return this.memeLibrary
   }
 

@@ -63,6 +63,8 @@ QQ 侧的表情来自 dsh-meme 图库（`~/.dsh/meme-packs` + 插件内置示例
 
 发图链路：模型输出 `[表情: 描述]` → 插件 `exact()`（caption 完全一致直接锁定）→ 不中则 `search()` 打分（caption 包含 / 关键词 / 2-gram / 标签同义）→ 再不行按情绪词随机抽一张 → 都没有就发小黄脸或纯文本。
 
+**图库根目录与启用开关都读 dsh-meme 自己的设置**（`<home>/.dsh/dsh-expression.json` 的 `packsDir` / `enabledPacks`），所以和 Web 面板里看到的包保持一致；面板里关掉的包不会被发出来。
+
 **新加的表情包 60 秒内自动生效**（图库缓存 TTL=60s，到期重扫；目录摘要同样 60 秒刷新），不需要重启 DSH。
 
 `memeDirs` 可在设置里覆盖扫描目录；`memeEnabled=false` 关闭整套表情功能。

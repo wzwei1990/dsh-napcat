@@ -1,6 +1,6 @@
 {
   "name": "dsh-napcat",
-  "version": "0.3.42",
+  "version": "0.3.43",
   "description": "NapCat / OneBot 11 通道插件：把 DeepSeek Harness 变成 QQ 机器人（私聊 + 群聊、@门控、白名单、长文分段、工具主动发送、设置页配置）。",
   "type": "module",
   "main": "lib/index.js",

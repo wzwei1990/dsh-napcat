@@ -9,7 +9,8 @@
  * 找到文件后由 NapCat 以图片消息真的发出去。
  * node:sqlite 在 Node 22.5+ 可用（本插件要求 Node >=22）；不可用或库损坏时静默跳过。
  */
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { readdir } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 
@@ -31,19 +32,59 @@ interface Row {
   keywords: string
 }
 
+/** dsh-meme 的设置文件内容（只读它关心的两项）。 */
+export interface MemeSettings {
+  /** 自定义图库根目录（设置页「图库目录」） */
+  packsDir?: string
+  /** 显式勾选启用的包 id；用户没拨过开关时为空 */
+  enabledPacks?: string[]
+}
+
+/** dsh-meme 的 home（它用 os.homedir()，可用 DSH_MEME_HOME 覆盖）。 */
+export function memeHomeDir(): string {
+  const overridden = (process.env.DSH_MEME_HOME ?? '').trim()
+  return overridden !== '' ? overridden : homedir()
+}
+
+/**
+ * 读 dsh-meme 的设置（`<memeHome>/.dsh/dsh-expression.json`）。
+ *
+ * 图库根目录与「启用了哪几个包」都以这份设置为准，否则会和 Web 面板显示不一致
+ * （线上曾出现面板 3 个包、插件只扫到内置 24 张的情况）。
+ */
+export function readMemeSettings(): MemeSettings {
+  const out: MemeSettings = {}
+  try {
+    const file = join(memeHomeDir(), '.dsh', 'dsh-expression.json')
+    if (!existsSync(file)) return out
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    const dir = typeof raw.packsDir === 'string' ? raw.packsDir.trim() : ''
+    if (dir !== '') out.packsDir = dir
+    if (Array.isArray(raw.enabledPacks)) {
+      out.enabledPacks = raw.enabledPacks.map(value => String(value)).filter(value => value !== '')
+    }
+  } catch {
+    // 设置文件缺失/损坏都不影响默认扫描
+  }
+  return out
+}
+
 /**
  * 默认扫描位置（全部一起搜，命中后按 caption+tag 去重）。
  *
- * 1. `<DSH_HOME>/meme-packs` —— dsh-meme 真正的图库根目录（设置页「图库目录」指向它，
- *    用户新增/下载的包都落在这里）；
- * 2. `profiles/<name>/node_modules/dsh-meme/memes` —— 插件包内自带的示例包（老布局兜底）。
+ * 1. dsh-meme 的设置里指定的 `packsDir`，否则 `<memeHome>/.dsh/meme-packs`；
+ * 2. `<DSH_HOME>/meme-packs`（有些部署 DSH_HOME 与 home 不同）；
+ * 3. `profiles/<name>/node_modules/dsh-meme/memes` —— 插件包内自带的示例包（兜底）。
  *
- * 旧实现只扫第 2 种，所以用户后加的包永远读不到。
+ * 旧实现只扫第 3 种，所以用户后加的包永远读不到。
  */
 export function defaultMemeDirs(dshHome: string): string[] {
   const dirs: string[] = []
+  const settings = readMemeSettings()
+  const memeRoot = settings.packsDir !== undefined ? settings.packsDir : join(memeHomeDir(), '.dsh', 'meme-packs')
+  if (existsSync(memeRoot) && !dirs.includes(memeRoot)) dirs.push(memeRoot)
   const userRoot = join(dshHome, 'meme-packs')
-  if (existsSync(userRoot)) dirs.push(userRoot)
+  if (existsSync(userRoot) && !dirs.includes(userRoot)) dirs.push(userRoot)
   const root = join(dshHome, 'profiles')
   try {
     for (const entry of readdirSync(root, { withFileTypes: true })) {
@@ -67,6 +108,8 @@ export class MemeLibrary {
     private readonly log: (level: string, message: string) => void = () => undefined,
     /** 缓存有效期（毫秒）：到期重扫图库，新加的包最多这么久后自动生效。 */
     private readonly ttlMs: number = 60_000,
+    /** 只读这些包（dsh-meme 设置里显式勾选的 enabledPacks；空/未给则全部读）。 */
+    private readonly allowedPacks?: readonly string[],
   ) {}
 
   /** 读取一个图库根目录下所有包的 memes 行。 */
@@ -84,6 +127,7 @@ export class MemeLibrary {
       const { DatabaseSync } = await import('node:sqlite') as { DatabaseSync: new (path: string, options?: { readOnly?: boolean }) => { prepare(sql: string): { all(...args: unknown[]): unknown[] }; close(): void } }
       for (const pack of packs) {
         if (!pack.isDirectory()) continue
+        if (this.allowedPacks !== undefined && this.allowedPacks.length > 0 && !this.allowedPacks.includes(pack.name)) continue
         const packDir = join(root, pack.name)
         const dbPath = join(packDir, 'index.db')
         if (!existsSync(dbPath)) continue

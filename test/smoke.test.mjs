@@ -727,12 +727,15 @@ test('表情图库：用户 meme-packs 与内置包一起搜（按 caption+tag �
   try {
     const builtin = join(home, 'profiles', 'web', 'node_modules', 'dsh-meme', 'memes')
     mkdirSync(builtin, { recursive: true })
-    // 只有内置包时：扫内置
-    assert.deepEqual(defaultMemeDirs(home), [builtin])
-    // 有用户图库时：两个都扫，用户图库在前
+    // 内置包目录一定要被扫到
+    assert.ok(defaultMemeDirs(home).includes(builtin))
+    // 有用户图库时：两个都扫，且用户图库排在前面
     const userRoot = join(home, 'meme-packs')
     mkdirSync(userRoot, { recursive: true })
-    assert.deepEqual(defaultMemeDirs(home), [userRoot, builtin])
+    const dirs = defaultMemeDirs(home)
+    assert.ok(dirs.includes(userRoot))
+    assert.ok(dirs.includes(builtin))
+    assert.ok(dirs.indexOf(userRoot) < dirs.indexOf(builtin))
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
