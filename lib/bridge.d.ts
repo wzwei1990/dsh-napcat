@@ -199,6 +199,8 @@ export declare class Bridge {
     /** 记录刚发过的原生表情（用于轮换，最多 8 个）。 */
     private noteFaceSent;
     private noteMemeSent;
+    /** 启动时把图库解析结果打到 info，方便一眼确认"扫的哪个目录、有多少张"。 */
+    private logMemeLibrary;
     /** 供 napcat_meme_search 工具：按描述查表情（返回 caption/tag 便于模型精确引用）。 */
     searchMemeForTool(query: string, limit: number): Promise<Array<{
         caption: string;

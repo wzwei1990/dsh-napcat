@@ -125,6 +125,7 @@ export class Bridge {
     this.archiveTimer = setInterval(() => { void this.archiveTick() }, 60_000)
     setTimeout(() => { void this.archiveTick() }, 5_000)
     void this.restoreArchivePending()
+    void this.logMemeLibrary()
     this.opts.log('info', '归档定时器已启动（每 60 秒检查；群空闲 ' + String(this.opts.config.archiveIdleMinutes) + ' 分钟后执行）')
     this.opts.log('info', '桥已就绪（每个 QQ 会话一个 agent）')
   }
@@ -2011,6 +2012,28 @@ export class Bridge {
     // 只负责记录（最多存 50 条），实际用多少由 memeAvoidSet() 按图库大小自动决定
     this.recentMemeFiles.unshift(file)
     while (this.recentMemeFiles.length > 50) this.recentMemeFiles.pop()
+  }
+
+  /** 启动时把图库解析结果打到 info，方便一眼确认"扫的哪个目录、有多少张"。 */
+  private async logMemeLibrary(): Promise<void> {
+    if (!this.opts.config.memeEnabled) {
+      this.opts.log('info', '表情功能已关闭（memeEnabled=false）')
+      return
+    }
+    const configured = this.opts.config.memeDirs.split(/[\n;,]/).map(part => normalizePath(part)).filter(part => part !== '')
+    const dshHome = (process.env.DSH_HOME ?? '').trim() !== '' ? normalizePath(process.env.DSH_HOME ?? '') : join(homedir(), '.dsh')
+    const dirs = configured.length > 0 ? configured : defaultMemeDirs(dshHome)
+    if (dirs.length === 0) {
+      this.opts.log('warn', '表情库为空：没找到任何图库目录（DSH_HOME=' + dshHome + '，找 <DSH_HOME>/meme-packs 或 profiles/*/node_modules/dsh-meme/memes）')
+      return
+    }
+    try {
+      const size = await this.memeLib().size()
+      this.opts.log('info', '表情库: ' + String(size) + ' 张 · 目录 ' + dirs.join(' , '))
+      if (size === 0) this.opts.log('warn', '表情库扫到 0 张（目录存在但没有 index.db 或图片缺失）')
+    } catch (error) {
+      this.opts.log('warn', '表情库加载失败: ' + describe(error))
+    }
   }
 
   /** 供 napcat_meme_search 工具：按描述查表情（返回 caption/tag 便于模型精确引用）。 */
