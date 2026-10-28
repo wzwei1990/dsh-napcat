@@ -264,6 +264,8 @@ export class Bridge {
   private readonly mutedUntil = new Map<string, number>()
   /** 表情库（懒加载）。 */
   private memeLibrary: MemeLibrary | undefined
+  /** 表情库目录摘要缓存（TTL 60 秒，图库变了能自动更上）。 */
+  private memeCatalogCache: { text: string; at: number } | undefined
   /** 归档定时器与运行时状态（独立静默会话，输出不进 QQ）。 */
   private archiveTimer: ReturnType<typeof setInterval> | undefined
   private readonly archiveAgents = new Map<string, { agent: Agent; dispose(): Promise<void> }>()
@@ -375,7 +377,7 @@ export class Bridge {
           const recalled = this.opts.config.memoryBackend === 'file'
             ? await this.mem.recall(ref.key, recent.slice(-5).join(' '), chat.agent)
             : ''
-          memoryBlock = this.mem.buildInjection({ chatKey: ref.key, recent, recallText: recalled, spaceId: proactiveSpaceId, recentExpressions: this.recentMemeCaptions, summary: (await this.mem.readSummary(ref.key))?.text, facts: { glossary: await this.mem.topTexts(ref.key, 'glossary', 8), setting: await this.mem.topTexts(ref.key, 'setting', 8), preference: await this.mem.topTexts(ref.key, 'preference', 6), style: await this.mem.topTexts(ref.key, 'style', 2), todo: await this.mem.topTexts(ref.key, 'todo', 5), event: await this.mem.topTexts(ref.key, 'event', 5) }, people: await this.peopleFor(ref.key), memeNudge: this.memeNudgeFor(ref.key) })
+          memoryBlock = this.mem.buildInjection({ chatKey: ref.key, recent, recallText: recalled, spaceId: proactiveSpaceId, recentExpressions: this.recentMemeCaptions, summary: (await this.mem.readSummary(ref.key))?.text, facts: { glossary: await this.mem.topTexts(ref.key, 'glossary', 8), setting: await this.mem.topTexts(ref.key, 'setting', 8), preference: await this.mem.topTexts(ref.key, 'preference', 6), style: await this.mem.topTexts(ref.key, 'style', 2), todo: await this.mem.topTexts(ref.key, 'todo', 5), event: await this.mem.topTexts(ref.key, 'event', 5) }, people: await this.peopleFor(ref.key), memeNudge: this.memeNudgeFor(ref.key), memeCatalog: await this.memeCatalogText() })
         } catch (error) {
           this.opts.log('debug', '主动发言记忆注入失败: ' + (error instanceof Error ? error.message : String(error)))
         }
@@ -1082,7 +1084,7 @@ export class Bridge {
         const query = history.slice(-5).join(' ')
         const recalled = query === '' ? '' : await this.mem.recall(ref.key, query, chat.agent)
         const spaceId = await this.mem.ensureSpace(ref.key, chat.agent)
-        memoryBlock = this.mem.buildInjection({ chatKey: ref.key, recent: history, recallText: recalled, spaceId, recentExpressions: this.recentMemeCaptions, summary: (await this.mem.readSummary(ref.key))?.text, facts: { glossary: await this.mem.topTexts(ref.key, 'glossary', 8), setting: await this.mem.topTexts(ref.key, 'setting', 8), preference: await this.mem.topTexts(ref.key, 'preference', 6), style: await this.mem.topTexts(ref.key, 'style', 2), todo: await this.mem.topTexts(ref.key, 'todo', 5), event: await this.mem.topTexts(ref.key, 'event', 5) }, people: await this.peopleFor(ref.key), memeNudge: this.memeNudgeFor(ref.key) })
+        memoryBlock = this.mem.buildInjection({ chatKey: ref.key, recent: history, recallText: recalled, spaceId, recentExpressions: this.recentMemeCaptions, summary: (await this.mem.readSummary(ref.key))?.text, facts: { glossary: await this.mem.topTexts(ref.key, 'glossary', 8), setting: await this.mem.topTexts(ref.key, 'setting', 8), preference: await this.mem.topTexts(ref.key, 'preference', 6), style: await this.mem.topTexts(ref.key, 'style', 2), todo: await this.mem.topTexts(ref.key, 'todo', 5), event: await this.mem.topTexts(ref.key, 'event', 5) }, people: await this.peopleFor(ref.key), memeNudge: this.memeNudgeFor(ref.key), memeCatalog: await this.memeCatalogText() })
       } catch (error) {
         this.opts.log('debug', '记忆注入失败: ' + (error instanceof Error ? error.message : String(error)))
       }
@@ -2009,6 +2011,56 @@ export class Bridge {
     // 只负责记录（最多存 50 条），实际用多少由 memeAvoidSet() 按图库大小自动决定
     this.recentMemeFiles.unshift(file)
     while (this.recentMemeFiles.length > 50) this.recentMemeFiles.pop()
+  }
+
+  /** 供 napcat_meme_search 工具：按描述查表情（返回 caption/tag 便于模型精确引用）。 */
+  async searchMemeForTool(query: string, limit: number): Promise<Array<{ caption: string; tag: string }>> {
+    try {
+      const hits = await this.memeLib().search(query, new Set(), Math.max(1, limit))
+      return hits.map(hit => ({ caption: hit.caption, tag: hit.tag }))
+    } catch (error) {
+      this.opts.log('debug', '表情检索失败: ' + describe(error))
+      return []
+    }
+  }
+
+  /** 供 napcat_meme_catalog 工具：分类 + 张数 + 示例。 */
+  async memeCatalogForTool(): Promise<Array<{ tag: string; count: number; samples: string[] }>> {
+    try {
+      return await this.memeLib().catalog(3)
+    } catch (error) {
+      this.opts.log('debug', '表情目录失败: ' + describe(error))
+      return []
+    }
+  }
+
+  /** 表情库目录摘要（缓存 60 秒；新加的表情包到期自动出现在目录里）。 */
+  private async memeCatalogText(): Promise<string> {
+    const cached = this.memeCatalogCache
+    if (cached !== undefined && Date.now() - cached.at < 60_000) return cached.text
+    if (!this.opts.config.memeEnabled) {
+      this.memeCatalogCache = { text: '', at: Date.now() }
+      return ''
+    }
+    try {
+      const catalog = await this.memeLib().catalog(2)
+      if (catalog.length === 0) {
+        this.memeCatalogCache = { text: '', at: Date.now() }
+        return ''
+      }
+      const total = catalog.reduce((sum, entry) => sum + entry.count, 0)
+      const lines = catalog.slice(0, 14).map(entry =>
+        entry.tag + '(' + entry.count + ')' + (entry.samples.length > 0 ? '：' + entry.samples.join(' / ') : ''))
+      const text = '【可用表情（共 ' + total + ' 张，按分类）】' + lines.join('；')
+        + '\n想发图就在回复里写 [表情: 描述]，描述要贴近上面某个分类的示例或某一类的意思；拿不准就不发。'
+        + '也可以先用 napcat_meme_search 查一下再写。'
+      this.memeCatalogCache = { text, at: Date.now() }
+      return text
+    } catch (error) {
+      this.opts.log('debug', '表情库目录生成失败: ' + describe(error))
+      this.memeCatalogCache = { text: '', at: Date.now() }
+      return ''
+    }
   }
 
   /** 懒加载表情库（优先配置目录，否则扫 DSH_HOME 下各 profile 里的 dsh-meme）。 */

@@ -64,6 +64,8 @@ export declare class Bridge {
     private readonly mutedUntil;
     /** 表情库（懒加载）。 */
     private memeLibrary;
+    /** 表情库目录摘要缓存（TTL 60 秒，图库变了能自动更上）。 */
+    private memeCatalogCache;
     /** 归档定时器与运行时状态（独立静默会话，输出不进 QQ）。 */
     private archiveTimer;
     private readonly archiveAgents;
@@ -197,6 +199,19 @@ export declare class Bridge {
     /** 记录刚发过的原生表情（用于轮换，最多 8 个）。 */
     private noteFaceSent;
     private noteMemeSent;
+    /** 供 napcat_meme_search 工具：按描述查表情（返回 caption/tag 便于模型精确引用）。 */
+    searchMemeForTool(query: string, limit: number): Promise<Array<{
+        caption: string;
+        tag: string;
+    }>>;
+    /** 供 napcat_meme_catalog 工具：分类 + 张数 + 示例。 */
+    memeCatalogForTool(): Promise<Array<{
+        tag: string;
+        count: number;
+        samples: string[];
+    }>>;
+    /** 表情库目录摘要（缓存 60 秒；新加的表情包到期自动出现在目录里）。 */
+    private memeCatalogText;
     /** 懒加载表情库（优先配置目录，否则扫 DSH_HOME 下各 profile 里的 dsh-meme）。 */
     private memeLib;
     /** 把本地图片文件作为图片消息发出去（带重试/禁言处理；dryRun 时只记日志）。 */

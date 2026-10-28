@@ -211,5 +211,6 @@ export declare class MemoryStore {
             style?: string;
             topics?: readonly string[];
         }>;
+        memeCatalog?: string;
     }): string;
 }

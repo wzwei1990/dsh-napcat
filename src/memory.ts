@@ -797,7 +797,7 @@ export class MemoryStore {
   }
 
   /** 组装注入文本（含 @ 优先级指令），超预算截断。 */
-  buildInjection(parts: { chatKey: string; recent: readonly string[]; recallText?: string; mention?: string; spaceId?: string; recentExpressions?: readonly string[]; memeNudge?: number; summary?: string; facts?: { glossary: readonly string[]; setting: readonly string[]; preference?: readonly string[]; style?: readonly string[]; todo?: readonly string[]; event?: readonly string[] }; people?: ReadonlyArray<{ name: string; style?: string; topics?: readonly string[] }> }): string {
+  buildInjection(parts: { chatKey: string; recent: readonly string[]; recallText?: string; mention?: string; spaceId?: string; recentExpressions?: readonly string[]; memeNudge?: number; summary?: string; facts?: { glossary: readonly string[]; setting: readonly string[]; preference?: readonly string[]; style?: readonly string[]; todo?: readonly string[]; event?: readonly string[] }; people?: ReadonlyArray<{ name: string; style?: string; topics?: readonly string[] }>; memeCatalog?: string }): string {
     const blocks: string[] = []
     blocks.push('这个会话来自 QQ（NapCat 渠道），聊天对象是 ' + parts.chatKey + '。')
     if (parts.mention !== undefined && parts.mention !== '') {
@@ -857,6 +857,10 @@ export class MemoryStore {
     if (parts.memeNudge !== undefined && parts.memeNudge > 0) {
       blocks.push('【这轮可以带个表情】最近 ' + parts.memeNudge + ' 条回复都没带表情包了；如果本轮气氛合适（吐槽、接梗、搞笑、卖萌），'
         + '就在回复里加一个 [表情:描述]（优先图库图，写具体点或抄候选 caption）。不必硬凑。')
+    }
+    // 表情库目录：让模型知道"库里有什么"，而不是凭空编描述
+    if (parts.memeCatalog !== undefined && parts.memeCatalog !== '') {
+      blocks.push(parts.memeCatalog)
     }
     // 群氛围（最高优先：决定语气与分寸）
     if (parts.facts?.style !== undefined && parts.facts.style.length > 0) {

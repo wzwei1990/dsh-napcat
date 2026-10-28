@@ -50,6 +50,10 @@ export interface ToolDeps {
   allowedGroups?: () => readonly string[]
   /** 把 chatKey → mnemon 空间 id 写进插件缓存 */
   rememberSpace?: (chatKey: string, spaceId: string) => Promise<void>
+  /** 表情库检索（由 Bridge 提供，避免 tools 里重复扫库） */
+  memeSearch?: (query: string, limit: number) => Promise<Array<{ caption: string; tag: string }>>
+  /** 表情库目录（分类 + 张数 + 示例） */
+  memeCatalog?: () => Promise<Array<{ tag: string; count: number; samples: string[] }>>
 }
 
 export function registerTools(
@@ -407,4 +411,42 @@ export function registerTools(
       await deps.rememberSpace?.('private:' + userId, spaceId)
       return '已登记：private:' + userId + ' → ' + spaceId + '（之后自动注入给模型）'
     },
-  }))}
+  }))
+
+  if (deps.memeSearch !== undefined) {
+    ctx.tools.register(defineTool({
+      name: 'napcat_meme_search',
+      description: '在本机表情图库里按描述查可用表情，返回候选描述（caption）与分类。查到后回复里写 [表情: 候选描述原文] 就能精确发出那张图。',
+      parameters: {
+        query: { type: 'string', required: true, description: '描述/情绪关键词，如「害羞」「摸鱼」「无语」' },
+        limit: { type: 'number', description: '最多返回几条（默认 5，最多 10）' },
+      },
+      output: textOutput(),
+      isConcurrencySafe: () => true,
+      execute: async args => {
+        const input = args as { query: string; limit?: number }
+        const limit = Math.min(10, Math.max(1, Math.floor(Number(input.limit ?? 5) || 5)))
+        const hits = await deps.memeSearch!(String(input.query ?? ''), limit)
+        if (hits.length === 0) return '没查到匹配的表情；可以换个说法，或用 napcat_meme_catalog 看分类。'
+        return hits.map(hit => '- ' + hit.caption + '（分类 ' + hit.tag + '）').join('\n')
+      },
+    }))
+  }
+
+  if (deps.memeCatalog !== undefined) {
+    ctx.tools.register(defineTool({
+      name: 'napcat_meme_catalog',
+      description: '列出本机表情图库的分类、张数与示例描述（想知道"有哪些图"时用）。',
+      parameters: {},
+      output: textOutput(),
+      isConcurrencySafe: () => true,
+      execute: async () => {
+        const catalog = await deps.memeCatalog!()
+        if (catalog.length === 0) return '表情图库是空的（检查 memeEnabled / memeDirs）。'
+        const total = catalog.reduce((sum, entry) => sum + entry.count, 0)
+        const lines = catalog.map(entry => entry.tag + '(' + entry.count + ')' + (entry.samples.length > 0 ? '：' + entry.samples.join(' / ') : ''))
+        return '共 ' + total + ' 张\n' + lines.join('\n')
+      },
+    }))
+  }
+}

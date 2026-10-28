@@ -58,18 +58,21 @@ export function defaultMemeDirs(dshHome: string): string[] {
 }
 
 export class MemeLibrary {
-  private readonly loaded = new Map<string, Row[]>()
+  /** 每个根目录的缓存行 + 读取时间（TTL 到了重扫，新加的包不用重启）。 */
+  private readonly loaded = new Map<string, { rows: Row[]; at: number }>()
   private readonly missing = new Set<string>()
 
   constructor(
     private readonly dirs: string[],
     private readonly log: (level: string, message: string) => void = () => undefined,
+    /** 缓存有效期（毫秒）：到期重扫图库，新加的包最多这么久后自动生效。 */
+    private readonly ttlMs: number = 60_000,
   ) {}
 
   /** 读取一个图库根目录下所有包的 memes 行。 */
   private async rowsOf(root: string): Promise<Row[]> {
     const cached = this.loaded.get(root)
-    if (cached !== undefined) return cached
+    if (cached !== undefined && Date.now() - cached.at < this.ttlMs) return cached.rows
     if (this.missing.has(root)) return []
     if (!existsSync(root)) {
       this.missing.add(root)
@@ -102,9 +105,31 @@ export class MemeLibrary {
     } catch (error) {
       this.log('debug', '扫描表情库失败 ' + root + ': ' + (error instanceof Error ? error.message : String(error)))
     }
-    this.loaded.set(root, rows)
+    this.loaded.set(root, { rows, at: Date.now() })
     if (rows.length > 0) this.log('debug', '表情库已加载 ' + rows.length + ' 张（' + root + '）')
     return rows
+  }
+
+  /**
+   * 图库目录摘要：每个分类的张数 + 几条示例描述。
+   * 给模型看"库里有什么"，避免它凭空编描述导致匹配不上。
+   */
+  async catalog(samplesPerTag = 2): Promise<Array<{ tag: string; count: number; samples: string[] }>> {
+    const rows = await this.allRows()
+    const byTag = new Map<string, { count: number; samples: string[] }>()
+    for (const row of rows) {
+      const tag = row.tag.trim() === '' ? 'untagged' : row.tag.trim()
+      const entry = byTag.get(tag) ?? { count: 0, samples: [] }
+      entry.count += 1
+      const caption = row.caption.trim()
+      if (caption !== '' && entry.samples.length < samplesPerTag && !entry.samples.includes(caption)) {
+        entry.samples.push(caption.slice(0, 24))
+      }
+      byTag.set(tag, entry)
+    }
+    return [...byTag.entries()]
+      .map(([tag, value]) => ({ tag, count: value.count, samples: value.samples }))
+      .sort((left, right) => right.count - left.count)
   }
 
   /** 图库总张数（自适应避重窗口用）。 */

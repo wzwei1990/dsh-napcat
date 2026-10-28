@@ -10,5 +10,16 @@ export interface ToolDeps {
     allowedGroups?: () => readonly string[];
     /** 把 chatKey → mnemon 空间 id 写进插件缓存 */
     rememberSpace?: (chatKey: string, spaceId: string) => Promise<void>;
+    /** 表情库检索（由 Bridge 提供，避免 tools 里重复扫库） */
+    memeSearch?: (query: string, limit: number) => Promise<Array<{
+        caption: string;
+        tag: string;
+    }>>;
+    /** 表情库目录（分类 + 张数 + 示例） */
+    memeCatalog?: () => Promise<Array<{
+        tag: string;
+        count: number;
+        samples: string[];
+    }>>;
 }
 export declare function registerTools(ctx: Context, conn: OneBotConnection, log: (level: LogLevel, message: string) => void, deps?: ToolDeps): void;

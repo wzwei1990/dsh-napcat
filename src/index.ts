@@ -71,6 +71,8 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
     keyForSession: sessionId => bridge.keyForSession(sessionId),
     allowedGroups: () => config.groupAllowFrom,
     rememberSpace: (chatKey, spaceId) => bridge.saveMemorySpace(chatKey, spaceId),
+  memeSearch: (query, limit) => bridge.searchMemeForTool(query, limit),
+  memeCatalog: () => bridge.memeCatalogForTool(),
   })
 
   // 群/人性格：照 dsh-im 的动态提示词上下文（按 sessionId 注入额外人设）

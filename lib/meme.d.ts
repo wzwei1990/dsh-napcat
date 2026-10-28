@@ -21,11 +21,25 @@ export declare function defaultMemeDirs(dshHome: string): string[];
 export declare class MemeLibrary {
     private readonly dirs;
     private readonly log;
+    /** 缓存有效期（毫秒）：到期重扫图库，新加的包最多这么久后自动生效。 */
+    private readonly ttlMs;
+    /** 每个根目录的缓存行 + 读取时间（TTL 到了重扫，新加的包不用重启）。 */
     private readonly loaded;
     private readonly missing;
-    constructor(dirs: string[], log?: (level: string, message: string) => void);
+    constructor(dirs: string[], log?: (level: string, message: string) => void, 
+    /** 缓存有效期（毫秒）：到期重扫图库，新加的包最多这么久后自动生效。 */
+    ttlMs?: number);
     /** 读取一个图库根目录下所有包的 memes 行。 */
     private rowsOf;
+    /**
+     * 图库目录摘要：每个分类的张数 + 几条示例描述。
+     * 给模型看"库里有什么"，避免它凭空编描述导致匹配不上。
+     */
+    catalog(samplesPerTag?: number): Promise<Array<{
+        tag: string;
+        count: number;
+        samples: string[];
+    }>>;
     /** 图库总张数（自适应避重窗口用）。 */
     size(): Promise<number>;
     private allRows;

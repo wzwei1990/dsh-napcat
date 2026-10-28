@@ -737,3 +737,35 @@ test('表情图库：用户 meme-packs 与内置包一起搜（按 caption+tag �
     rmSync(home, { recursive: true, force: true })
   }
 })
+test('表情图库：TTL 到期后重扫，新加的包自动生效', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { MemeLibrary } = await import('../lib/meme.js')
+  const { DatabaseSync } = await import('node:sqlite')
+  const root = mkdtempSync(join(tmpdir(), 'memettl-'))
+  const makePack = (name, caption) => {
+    const dir = join(root, name)
+    mkdirSync(join(dir, 'memes', 'happy'), { recursive: true })
+    writeFileSync(join(dir, 'memes', 'happy', 'a.png'), 'x')
+    const db = new DatabaseSync(join(dir, 'index.db'))
+    db.exec('CREATE TABLE memes (path TEXT, tag TEXT, caption TEXT, keywords TEXT)')
+    db.prepare('INSERT INTO memes VALUES (?,?,?,?)').run('memes/happy/a.png', 'happy', caption, '')
+    db.close()
+  }
+  try {
+    makePack('pack1', '第一张')
+    const lib = new MemeLibrary([root], () => undefined, 150)
+    assert.equal(await lib.size(), 1)
+    makePack('pack2', '第二张')
+    // 缓存期内仍是旧结果
+    assert.equal(await lib.size(), 1)
+    await new Promise(resolve => setTimeout(resolve, 200))
+    // 过期后重扫 → 新包可见
+    assert.equal(await lib.size(), 2)
+    const hits = await lib.search('第二张', new Set(), 3)
+    assert.equal(hits[0]?.caption, '第二张')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
