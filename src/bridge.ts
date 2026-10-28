@@ -378,7 +378,7 @@ export class Bridge {
           const recalled = this.opts.config.memoryBackend === 'file'
             ? await this.mem.recall(ref.key, recent.slice(-5).join(' '), chat.agent)
             : ''
-          memoryBlock = this.mem.buildInjection({ chatKey: ref.key, recent, recallText: recalled, spaceId: proactiveSpaceId, recentExpressions: this.recentMemeCaptions, summary: (await this.mem.readSummary(ref.key))?.text, facts: { glossary: await this.mem.topTexts(ref.key, 'glossary', 8), setting: await this.mem.topTexts(ref.key, 'setting', 8), preference: await this.mem.topTexts(ref.key, 'preference', 6), style: await this.mem.topTexts(ref.key, 'style', 2), todo: await this.mem.topTexts(ref.key, 'todo', 5), event: await this.mem.topTexts(ref.key, 'event', 5) }, people: await this.peopleFor(ref.key), memeNudge: this.memeNudgeFor(ref.key), memeCatalog: await this.memeCatalogText() })
+          memoryBlock = this.mem.buildInjection({ chatKey: ref.key, recent, recallText: recalled, spaceId: proactiveSpaceId, recentExpressions: this.recentMemeCaptions, summary: (await this.mem.readSummary(ref.key))?.text, facts: { glossary: await this.mem.topTexts(ref.key, 'glossary', 8), setting: await this.mem.topTexts(ref.key, 'setting', 8), preference: await this.mem.topTexts(ref.key, 'preference', 6), style: await this.mem.topTexts(ref.key, 'style', 2), todo: await this.mem.topTexts(ref.key, 'todo', 5), event: await this.mem.topTexts(ref.key, 'event', 5) }, people: await this.peopleFor(ref.key), memeNudge: this.memeNudgeFor(ref.key), memeCatalog: await this.memeCatalogText(), memeAllowed: this.memeAllowedFor(ref.key), memeSinceLast: this.repliesSinceMeme.get(ref.key) ?? 0 })
         } catch (error) {
           this.opts.log('debug', '主动发言记忆注入失败: ' + (error instanceof Error ? error.message : String(error)))
         }
@@ -434,6 +434,13 @@ export class Bridge {
   async saveMemorySpace(chatKey: string, spaceId: string): Promise<void> {
     await this.mem.saveSpace(chatKey, spaceId)
     this.opts.log('info', '已登记记忆空间: ' + chatKey + ' → ' + spaceId)
+  }
+
+  /** 本轮能不能发表情：距上次带图已隔够 `memeMinGap` 条文字回复才算可以。 */
+  private memeAllowedFor(key: string): boolean {
+    const gap = Math.max(0, Math.floor(this.opts.config.memeMinGap))
+    if (gap <= 1) return true
+    return (this.repliesSinceMeme.get(key) ?? gap) >= gap
   }
 
   /** 记一轮"带没带表情"：带了清零，没带 +1（供下轮注入做频率提示）。 */
@@ -1093,7 +1100,7 @@ export class Bridge {
         const query = history.slice(-5).join(' ')
         const recalled = query === '' ? '' : await this.mem.recall(ref.key, query, chat.agent)
         const spaceId = await this.mem.ensureSpace(ref.key, chat.agent)
-        memoryBlock = this.mem.buildInjection({ chatKey: ref.key, recent: history, recallText: recalled, spaceId, recentExpressions: this.recentMemeCaptions, summary: (await this.mem.readSummary(ref.key))?.text, facts: { glossary: await this.mem.topTexts(ref.key, 'glossary', 8), setting: await this.mem.topTexts(ref.key, 'setting', 8), preference: await this.mem.topTexts(ref.key, 'preference', 6), style: await this.mem.topTexts(ref.key, 'style', 2), todo: await this.mem.topTexts(ref.key, 'todo', 5), event: await this.mem.topTexts(ref.key, 'event', 5) }, people: await this.peopleFor(ref.key), memeNudge: this.memeNudgeFor(ref.key), memeCatalog: await this.memeCatalogText() })
+        memoryBlock = this.mem.buildInjection({ chatKey: ref.key, recent: history, recallText: recalled, spaceId, recentExpressions: this.recentMemeCaptions, summary: (await this.mem.readSummary(ref.key))?.text, facts: { glossary: await this.mem.topTexts(ref.key, 'glossary', 8), setting: await this.mem.topTexts(ref.key, 'setting', 8), preference: await this.mem.topTexts(ref.key, 'preference', 6), style: await this.mem.topTexts(ref.key, 'style', 2), todo: await this.mem.topTexts(ref.key, 'todo', 5), event: await this.mem.topTexts(ref.key, 'event', 5) }, people: await this.peopleFor(ref.key), memeNudge: this.memeNudgeFor(ref.key), memeCatalog: await this.memeCatalogText(), memeAllowed: this.memeAllowedFor(ref.key), memeSinceLast: this.repliesSinceMeme.get(ref.key) ?? 0 })
       } catch (error) {
         this.opts.log('debug', '记忆注入失败: ' + (error instanceof Error ? error.message : String(error)))
       }
@@ -2086,8 +2093,9 @@ export class Bridge {
       const total = catalog.reduce((sum, entry) => sum + entry.count, 0)
       const lines = catalog.slice(0, 14).map(entry =>
         entry.tag + '(' + entry.count + ')' + (entry.samples.length > 0 ? '：' + entry.samples.join(' / ') : ''))
-      const text = '【可用表情（共 ' + total + ' 张，按分类）】' + lines.join('；')
-        + '\n想发图就在回复里写 [表情: 描述]，描述要贴近上面某个分类的示例或某一类的意思；拿不准就不发。'
+      const text = '【可用表情包（共 ' + total + ' 张，按分类）】' + lines.join('；')
+        + '\n想发时在回复里写 [表情: 描述]（贴近上面某分类的示例或某一类的意思）；拿不准就不发。'
+        + '\n这是图库里的**表情包图片**（不是用户发的图，两者无关）：只是调味，别每条都配；情绪到位、接梗、卖萌时才用。'
         + '也可以先用 napcat_meme_search 查一下再写。'
       this.memeCatalogCache = { text, at: Date.now() }
       return text

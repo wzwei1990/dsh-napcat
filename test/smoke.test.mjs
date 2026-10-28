@@ -781,3 +781,31 @@ test('人物表：peopleLimit=0 不写上限，>0 写具体数字', async () => 
   const capped = buildArchivePrompt({ ...base, peopleLimit: 12 })
   assert.ok(capped.includes('最多 12 个'))
 })
+test('表情频率闸门：memeAllowed=false 时注入"本条不要发表情包"', async () => {
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const tmp = mkdtempSync(join(tmpdir(), 'memegate-'))
+  try {
+    const store = new MemoryStore({
+      ctx: {}, root: tmp, spacePrefix: 'napcat-', backend: 'file',
+      recentLimit: 200, injectRecent: 20, injectMaxChars: 4000, log: () => undefined,
+    })
+    const catalog = '【可用表情（共 146 张，按分类）】daily(38)：摸鱼'
+    const blocked = store.buildInjection({ chatKey: 'group:1', recent: [], recallText: '', spaceId: 'x', memeCatalog: catalog, memeAllowed: false, memeSinceLast: 0 })
+    const open = store.buildInjection({ chatKey: 'group:1', recent: [], recallText: '', spaceId: 'x', memeCatalog: catalog, memeAllowed: true, memeSinceLast: 3 })
+    // 评分清单常驻
+    assert.ok(blocked.includes('要不要发表情包·自己评一下'))
+    assert.ok(open.includes('要不要发表情包·自己评一下'))
+    assert.ok(open.includes('≥3 分才发'))
+    // 硬底线：刚发过时明确禁止，且提示已隔条数
+    assert.ok(blocked.includes('本条硬性不许发表情包'))
+    assert.ok(!open.includes('本条硬性不许发表情包'))
+    assert.ok(open.includes('已隔 3 条文字回复'))
+    // 目录仍然在
+    assert.ok(blocked.includes('【可用表情'))
+    assert.ok(open.includes('【可用表情'))
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})

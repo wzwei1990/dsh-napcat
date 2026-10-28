@@ -25,6 +25,8 @@ export interface Config {
     dangerReplyPrompt: string;
     /** 人物表上限（0=不限制；>0 时按 weight 保留前 N 个）。 */
     peopleLimit: number;
+    /** 连续多少条文字回复后才允许再发表情（0=不限制）。 */
+    memeMinGap: number;
     /** 私聊策略：admin=仅管理员；open=任何人；disabled=关闭。 */
     dmPolicy: 'admin' | 'open' | 'disabled';
     /** dmPolicy=open 时的额外白名单（留空=不限）。 */

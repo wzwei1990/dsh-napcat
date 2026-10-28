@@ -98,6 +98,8 @@ export declare class Bridge {
     /** 供 napcat_memory_space 工具登记空间 id。 */
     /** 供 napcat_memory_space 工具登记空间 id。 */
     saveMemorySpace(chatKey: string, spaceId: string): Promise<void>;
+    /** 本轮能不能发表情：距上次带图已隔够 `memeMinGap` 条文字回复才算可以。 */
+    private memeAllowedFor;
     /** 记一轮"带没带表情"：带了清零，没带 +1（供下轮注入做频率提示）。 */
     private noteReplyMemeState;
     /** 连续几条回复没带表情（到阈值才提示，0=关闭）。 */

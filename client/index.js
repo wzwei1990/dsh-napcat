@@ -58,6 +58,7 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'memeRecentLimit', label: '表情避重窗口（-1=自动按图库大小，0=不避重）', kind: 'number' },
         { key: 'memeLooseFallback', label: '匹配不到时也随机发一张图（默认关，避免不贴题）', kind: 'boolean' },
         { key: 'memeNudgeAfter', label: '连续几条回复没发表情就提醒模型带一个（0=不提醒）', kind: 'number' },
+        { key: 'memeMinGap', label: '表情包最小间隔（几条文字后才可再发；0=不限制）', kind: 'number' },
         { key: 'outboundImageMaxBytes', label: '单张待发送图片上限（字节，默认 8MB）', kind: 'number' },
         { key: 'reconnectMaxAttempts', label: '重连上限（0=无限）', kind: 'number' },
         { key: 'workspacePath', label: '会话工作区路径（留空=宿主 cwd）', kind: 'text' },

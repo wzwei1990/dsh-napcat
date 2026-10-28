@@ -212,5 +212,7 @@ export declare class MemoryStore {
             topics?: readonly string[];
         }>;
         memeCatalog?: string;
+        memeAllowed?: boolean;
+        memeSinceLast?: number;
     }): string;
 }

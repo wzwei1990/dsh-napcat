@@ -28,6 +28,8 @@ export interface Config {
   dangerReplyPrompt: string
   /** 人物表上限（0=不限制；>0 时按 weight 保留前 N 个）。 */
   peopleLimit: number
+  /** 连续多少条文字回复后才允许再发表情（0=不限制）。 */
+  memeMinGap: number
   /** 私聊策略：admin=仅管理员；open=任何人；disabled=关闭。 */
   dmPolicy: 'admin' | 'open' | 'disabled'
   /** dmPolicy=open 时的额外白名单（留空=不限）。 */
@@ -124,6 +126,8 @@ export const Config: Z<Config> = z.object({
     .description('让模型说拒绝时的开场句模板（支持 {category}；留空用内置）').volatile(),
   peopleLimit: z.natural().default(0)
     .description('人物表上限：0=不限制（默认，只留真正有辨识度的）；>0 时按权重保留前 N 个').volatile(),
+  memeMinGap: z.natural().default(1)
+    .description('表情包图片硬底线：至少隔几条文字回复才允许再发（0=完全不限，1=只禁止连续两条都带表情包；发不发仍由模型按评分清单判断）').volatile(),
   dmPolicy: z.union([z.const('admin'), z.const('open'), z.const('disabled')]).default('admin')
     .description('私聊策略：admin=仅管理员；open=任何人；disabled=关闭').volatile(),
   allowFrom: z.array(z.string()).default([])
@@ -210,6 +214,7 @@ export const DEFAULTS: Config = {
   dangerWords: [],
   dangerReplyPrompt: '',
   peopleLimit: 0,
+  memeMinGap: 1,
   dmPolicy: 'admin',
   allowFrom: [],
   groupPolicy: 'allowlist',
