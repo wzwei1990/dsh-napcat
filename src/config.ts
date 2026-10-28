@@ -26,6 +26,8 @@ export interface Config {
   dangerWords: string[]
   /** 让模型说拒绝时的开场句模板，支持 {category}；留空用内置。 */
   dangerReplyPrompt: string
+  /** 人物表上限（0=不限制；>0 时按 weight 保留前 N 个）。 */
+  peopleLimit: number
   /** 私聊策略：admin=仅管理员；open=任何人；disabled=关闭。 */
   dmPolicy: 'admin' | 'open' | 'disabled'
   /** dmPolicy=open 时的额外白名单（留空=不限）。 */
@@ -120,6 +122,8 @@ export const Config: Z<Config> = z.object({
     .description('额外危险词（包含即命中，正则元字符会自动转义）').volatile(),
   dangerReplyPrompt: z.string().default('')
     .description('让模型说拒绝时的开场句模板（支持 {category}；留空用内置）').volatile(),
+  peopleLimit: z.natural().default(0)
+    .description('人物表上限：0=不限制（默认，只留真正有辨识度的）；>0 时按权重保留前 N 个').volatile(),
   dmPolicy: z.union([z.const('admin'), z.const('open'), z.const('disabled')]).default('admin')
     .description('私聊策略：admin=仅管理员；open=任何人；disabled=关闭').volatile(),
   allowFrom: z.array(z.string()).default([])
@@ -205,6 +209,7 @@ export const DEFAULTS: Config = {
   dangerPolicy: 'admin-only',
   dangerWords: [],
   dangerReplyPrompt: '',
+  peopleLimit: 0,
   dmPolicy: 'admin',
   allowFrom: [],
   groupPolicy: 'allowlist',

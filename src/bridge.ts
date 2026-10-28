@@ -451,7 +451,8 @@ export class Bridge {
   /** 人物群像 → 注入用数组（按评分取前 6，名字+画像）。 */
   private async peopleFor(chatKey: string): Promise<Array<{ name: string; style?: string; topics?: readonly string[] }>> {
     try {
-      const texts = await this.mem.topTexts(chatKey, 'person', 6)
+      const limit = Math.max(0, Math.floor(this.opts.config.peopleLimit))
+    const texts = await this.mem.topTexts(chatKey, 'person', limit > 0 ? limit : 200)
       return texts.map(text => {
         const [name, ...rest] = text.split('：')
         return { name: (name ?? text).trim(), style: rest.join('：').trim() }
@@ -702,9 +703,11 @@ export class Bridge {
     // 带上现有记忆，让模型输出"合并后的完整版"（更新而不是叠加）
     const existingSummary = await this.mem.readSummary(key)
     const existingItems = await this.mem.readItems(key)
+    const peopleLimit = Math.max(0, Math.floor(this.opts.config.peopleLimit))
+    const existingPeople = existingItems.filter(item => item.kind === 'person')
     const existing = {
       summary: existingSummary?.text,
-      people: existingItems.filter(item => item.kind === 'person').slice(0, 6).map(item => {
+      people: (peopleLimit > 0 ? existingPeople.slice(0, peopleLimit) : existingPeople).map(item => {
         const [name, ...rest] = item.text.split('：')
         return { name: (name ?? item.text).trim(), style: rest.join('：').trim() !== '' ? rest.join('：').trim() : undefined }
       }),
@@ -714,7 +717,7 @@ export class Bridge {
     const spaceId = await this.mem.readSpaceId(key)
     const text = await this.collectArchiveOutput(sessionId, async () => {
       await handle.agent.followup(createUserMessage({
-        content: [{ type: 'text', text: buildArchivePrompt({ path: pending.path, count: pending.count, chatKey: key, existing, spaceId }) }],
+        content: [{ type: 'text', text: buildArchivePrompt({ path: pending.path, count: pending.count, chatKey: key, existing, spaceId, peopleLimit }) }],
         source: { kind: 'plugin:dsh-napcat' },
       }))
     }, 180_000)

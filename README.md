@@ -121,6 +121,8 @@ QQ 侧的表情来自 dsh-meme 图库（`~/.dsh/meme-packs` + 插件内置示例
 
 评分 = 权重 60% + 频率 25% + 新鲜度 15%；有效分 < 0.25 且 45 天未出现 → 淘汰；同类超 30 条按分数保留。
 
+人物表默认**不设上限**（`peopleLimit=0`）：提示词只要求"写真正有辨识度的"，不再机械填满 6 个；想把注入控制得更小就设 `peopleLimit=8` 之类（会同时约束归档输出、现有记忆回灌与每轮注入）。
+
 **独立静默会话**，不是搭在回复里：攒够 `archiveEvery`（默认 50）条消息、且群空闲 `archiveIdleMinutes`（默认 2）分钟后，插件开一个 `napcat-archive-<群>` 会话，把批次文件交给它，要求模型**只输出一个 JSON**：
 
 ```json
@@ -434,7 +436,7 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `archiveEventDays` | `45` | 事件类记忆保留天数（到期自动淡出） |
 | `dangerPolicy` | `admin-only` | 危险操作策略：admin-only=仅管理员可发起 / allow=谁都能发 / off=不拦截 |
 | `dangerWords` | `[]` | 额外危险词（包含即命中） |
-| `dangerReplyPrompt` | （空） | 拒绝话术的提示词模板，支持 `{category}`；留空用内置 |
+| `dangerReplyPrompt` | （空） | 拒绝话术的提示词模板，支持 `{category}`；留空用内置 |`n| `peopleLimit` | `0` | 人物表上限：0=不限制（默认），>0 按权重保留前 N 个 |
 | `archiveIdleMinutes` | `2` | 群空闲多少分钟后起一轮**独立归档**（模型专门跑，输出不进 QQ） |
 | `recentLimit` | `200` | 缓冲容量：保留多少条 = 预热补到多少条（含"最多存多少"与"补多少"两层含义；调小=少存少补） |
 | `injectRecent` | `20` | 每次触发注入最近对话条数（直接影响 token 成本） |

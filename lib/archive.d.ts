@@ -58,6 +58,7 @@ export declare function buildArchivePrompt(input: {
     chatKey: string;
     existing?: ArchiveExisting;
     spaceId?: string;
+    peopleLimit?: number;
 }): string;
 /** 从模型输出里抠出第一个合法 JSON 对象（容忍代码围栏、前后杂字、<归档> 包装）。 */
 export declare function parseArchivePayload(text: string): ArchivePayload | undefined;

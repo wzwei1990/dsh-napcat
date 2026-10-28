@@ -772,3 +772,12 @@ test('表情图库：TTL 到期后重扫，新加的包自动生效', async () =
     rmSync(root, { recursive: true, force: true })
   }
 })
+test('人物表：peopleLimit=0 不写上限，>0 写具体数字', async () => {
+  const { buildArchivePrompt } = await import('../lib/archive.js')
+  const base = { path: '/tmp/batch.jsonl', count: 50, chatKey: 'group:1' }
+  const unlimited = buildArchivePrompt(base)
+  assert.ok(unlimited.includes('不设上限'))
+  assert.ok(!unlimited.includes('最多 6 个'))
+  const capped = buildArchivePrompt({ ...base, peopleLimit: 12 })
+  assert.ok(capped.includes('最多 12 个'))
+})

@@ -39,7 +39,7 @@ export interface ArchiveExisting {
 }
 
 /** 构造归档轮的提示词（只读素材 + 只输出 JSON + 合并更新 + 写 mnemon）。 */
-export function buildArchivePrompt(input: { path: string; count: number; chatKey: string; existing?: ArchiveExisting; spaceId?: string }): string {
+export function buildArchivePrompt(input: { path: string; count: number; chatKey: string; existing?: ArchiveExisting; spaceId?: string; peopleLimit?: number }): string {
   const existing = input.existing
   const lines: string[] = []
   lines.push('你是这个 QQ 群的记忆整理员。这一轮**只做归档**：不回答别人、不闲聊、不发消息。')
@@ -80,7 +80,8 @@ export function buildArchivePrompt(input: { path: string; count: number; chatKey
 
   lines.push('## 任务（每项都输出**合并后的完整内容**，不要只写新增）')
   lines.push('1. summary：把【现有摘要】与新消息合并成 3~6 句（过时的删掉、同主题并成一句，不拼接、不写流水账）。')
-  lines.push('2. people：更新后的完整人物表（最多 6 个）。已有的人在原条目上更新 style/topics，不重复建条目；新人只加有辨识度的；同一人多称呼合并。每人给 weight（1~5，越重要越大）。')
+  const peopleLimit = Math.max(0, Math.floor(input.peopleLimit ?? 0))
+  lines.push('2. people：更新后的完整人物表（' + (peopleLimit > 0 ? '最多 ' + peopleLimit + ' 个，按 weight 保留最重要的' : '不设上限，只写真正有辨识度、值得长期记住的人') + '）。已有的人在原条目上更新 style/topics，不重复建条目；新人只加有辨识度的；同一人多称呼合并。每人给 weight（1~5，越重要越大）。')
   lines.push('3. glossary：合并后的完整黑话列表（最多 15 条），每条 {"text":"…","weight":1~5}。')
   lines.push('4. setting：合并后的完整设定列表（最多 15 条），称呼/规矩/禁忌，被取代的旧条目要替换掉，每条 {"text":"…","weight":1~5}。')
   lines.push('5. preference：偏好列表（最多 10 条）——谁喜欢/讨厌什么、口味、忌讳话题，如 {"text":"老灯不喝咖啡","weight":3}；涉及人时带上昵称。')

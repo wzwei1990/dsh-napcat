@@ -1,6 +1,6 @@
 {
   "id": "dsh-napcat",
-  "version": "0.3.43",
+  "version": "0.3.44",
   "main": "./lib/index.js",
   "description": "QQ channel for DeepSeek Harness over NapCat / OneBot 11: forward or reverse WebSocket, private + group chats with allowlists and mention gating, per-chat agent sessions, long-reply splitting, and tools for proactive sends.",
   "engines": {
