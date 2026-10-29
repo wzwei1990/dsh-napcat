@@ -70,6 +70,8 @@ export declare class Bridge {
     private memeCatalogCache;
     /** 归档定时器与运行时状态（独立静默会话，输出不进 QQ）。 */
     private archiveTimer;
+    /** 主动发言的定时评估器（每 60 秒扫一遍有动静的群） */
+    private proactiveTimer;
     private readonly archiveAgents;
     private readonly archiveRunning;
     private readonly archiveLastActivity;
@@ -94,6 +96,11 @@ export declare class Bridge {
     private readonly proactiveEval;
     /** 记录一条他人消息（供主动发言判断"有没有人在聊"）。 */
     private noteChatter;
+    /**
+     * 定时评估：冷清群不能只靠"来一条消息掷一次骰子"，否则十几分钟才评估一次。
+     * 每 60 秒扫一遍最近还有动静的群，交给同一套决策（内部有 20 秒节流与各类硬门）。
+     */
+    private proactiveTick;
     /**
      * 判断并（可能）主动插话。只在群里、且用户没叫它的时候调用。
      * 判定不通过就什么都不做；通过则投递一条 [主动发言] 请求，由模型决定说还是回 __SKIP__。
