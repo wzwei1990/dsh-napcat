@@ -60,6 +60,8 @@ export declare class Bridge {
     private readonly chatterReady;
     /** 已投递主动发言请求、等待回复拦截的聊天。 */
     private readonly pendingProactive;
+    /** 每次主动发言的投递时间（用于超时清理，避免卡死后再也不插话） */
+    private readonly proactiveStartedAt;
     /** 群禁言到什么时候（毫秒）：期间不发消息，也跳过主动发言。 */
     private readonly mutedUntil;
     /** 表情库（懒加载）。 */
@@ -88,6 +90,8 @@ export declare class Bridge {
     private selfQqCache;
     /** 上次「被硬门挡住」的提示时间（防刷屏，每群 10 分钟一条）。 */
     private readonly proactiveNoticeAt;
+    /** 评估计数（每群：窗口内评估次数 + 最后一次未中原因），用于 30 分钟一条诊断 */
+    private readonly proactiveEval;
     /** 记录一条他人消息（供主动发言判断"有没有人在聊"）。 */
     private noteChatter;
     /**
@@ -98,6 +102,11 @@ export declare class Bridge {
     /** 供 napcat_memory_space 工具登记空间 id。 */
     /** 供 napcat_memory_space 工具登记空间 id。 */
     saveMemorySpace(chatKey: string, spaceId: string): Promise<void>;
+    /**
+     * 最近几条里如果有链接（http/https），就提示模型"话题是这条链接"，
+     * 并明确要求先抓取内容再聊——否则模型读不懂链接，只能抓更早的话题硬接。
+     */
+    private linkHintOf;
     /** 本轮能不能发表情：距上次带图已隔够 `memeMinGap` 条文字回复才算可以。 */
     private memeAllowedFor;
     /** 记一轮"带没带表情"：带了清零，没带 +1（供下轮注入做频率提示）。 */
@@ -136,6 +145,16 @@ export declare class Bridge {
     private debugLog;
     /** 宿主会话 id → QQ 会话 key（工具省略 chat_id 时用来定位当前会话）。 */
     keyForSession(sessionId: string): string | undefined;
+    /**
+     * 最近几条里最新的一张已缓存图片 → 附件块。
+     * 主动发言没有"当前消息"，只有记录里的路径；把图直接附上，模型就一定会看到。
+     */
+    private latestImageOf;
+    /**
+     * 把本地图片交给宿主附件准入，产出 image content block。
+     * 供两处复用：入站图片消息、主动发言时把"最新那张图"直接附上（省得模型不肯主动 read_image）。
+     */
+    private admitImage;
     /** 把消息里的图片/文件下载到会话收件箱，返回给模型的文本注释（[图片: path]）。 */
     private resolveInboundMedia;
     /** 同一聊天并发进来时只装配一次（并发 create 会撞 write handle）。 */

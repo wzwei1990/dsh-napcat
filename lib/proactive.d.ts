@@ -34,6 +34,8 @@ export interface ChatProactiveState {
     sentAt: number[];
     /** 连续被模型 __SKIP__ 的次数（用于退避） */
     skipStreak: number;
+    /** 上次跳过的时间（ms）；太久没跳过就把退避清零，避免永久变安静 */
+    lastSkipAt?: number;
     /** 上次"考虑"的时间（ms） */
     lastConsiderAt: number;
 }
@@ -50,7 +52,10 @@ export declare function inQuietHours(minuteOfDay: number, ranges: ReadonlyArray<
  * λ 用每小时期望次数换算成每毫秒，p = 1 - e^(-λt)。
  */
 export declare function poissonHit(ratePerHour: number, elapsedMs: number): number;
-/** 连续 skip 后的退避：第 n 次连续跳过，近似把 λ 减半（最多退到 1/8）。 */
+/**
+ * 连续 skip 后的退避：第 n 次连续跳过把 λ 减半，**下限 1/2**。
+ * 旧实现退到 1/8，一次「闭嘴」就可能让机器人安静几个小时（2026-10-29 线上反馈）。
+ */
 export declare function skipBackoffFactor(skipStreak: number): number;
 export declare function newChatState(): ChatProactiveState;
 export declare function pruneSentAt(sentAt: number[], now: number): number[];

@@ -96,7 +96,12 @@ export function buildArchivePrompt(input: { path: string; count: number; chatKey
   lines.push('')
 
   if (input.spaceId !== undefined && input.spaceId !== '') {
-    lines.push('## 长期记忆（mnemon，必须做）')
+    lines.push('## 不要记的东西（很重要）')
+  lines.push('- 「闭嘴」「别说了」「滚」这类**一次性情绪/玩笑**不要写进设定/偏好/事件，也不要写成"机器人应该少说话"的规则；')
+  lines.push('  只有当它**明确、反复**形成长期约定（如"本群禁止机器人插话"）才记，并写清来源人和日期。')
+  lines.push('- 临时话题、寒暄、玩笑话都别沉淀；只留能长期复用的事实（称呼/规矩/黑话/偏好/约定/重要事件）。')
+  lines.push('')
+  lines.push('## 长期记忆（mnemon，必须做）')
     lines.push('- 本群空间 id：' + input.spaceId)
     lines.push('- 先召回：mnemon_recall({ memoryBodyIds: ["' + input.spaceId + '"], query: "设定 称呼 黑话 人物" })')
     lines.push('- 再写入新出现或已变化的条目：mnemon_remember({ memoryBodyIds: ["' + input.spaceId + '"], content: "【设定】群主要叫帅哥（更新于 MM-DD）", tags: ["setting"] })')

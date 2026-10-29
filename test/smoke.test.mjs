@@ -181,6 +181,8 @@ test('主动发言：静默时段 / 泊松 / 退避 / 门槛', () => {
   assert.ok(poissonHit(0, 1000) === 0)
   assert.equal(skipBackoffFactor(0), 1)
   assert.equal(skipBackoffFactor(1), 0.5)
+  assert.equal(skipBackoffFactor(2), 0.5)
+  assert.equal(skipBackoffFactor(5), 0.5)
 
   const base = {
     enabled: true, ratePerHour: 0, chance: 1, cooldownMinutes: 30,
@@ -808,4 +810,27 @@ test('表情频率闸门：memeAllowed=false 时注入"本条不要发表情包"
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }
+})
+test('链接话题提示：最近三条有 http 链接就提示先抓取', async () => {
+  // 复刻 bridge.linkHintOf 的匹配规则（该方法是私有方法，这里验证判定逻辑）
+  const linkHintOf = lines => {
+    const tail = lines.slice(-3)
+    for (let index = tail.length - 1; index >= 0; index -= 1) {
+      const line = tail[index] ?? ''
+      const match = /https?:\/\/[^\s"'）)】]+/.exec(line)
+      if (match === null) continue
+      return '【最新话题是一条链接】' + match[0]
+    }
+    return ''
+  }
+  const lines = [
+    '御前大公公灯忠贤：对，就是把折叠屏那个梗，换成宫里的床才这么好笑',
+    '户部都给事中-胡椒：【质感绝了！真人版《剑来》全新预告】 https://www.bilibili.com/video/BV15cs96zEvi/?share_source=copy_web',
+    '户部都给事中-胡椒：真人版预告',
+  ]
+  const hint = linkHintOf(lines)
+  assert.ok(hint.includes('bilibili.com/video/BV15cs96zEvi'))
+  assert.equal(linkHintOf(['今天天气不错', '吃了没']), '')
+  // 只看最近三条：更早的链接不该触发
+  assert.equal(linkHintOf(['https://old.example.com/x', 'a', 'b', 'c']), '')
 })
