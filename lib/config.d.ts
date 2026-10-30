@@ -69,6 +69,8 @@ export interface Config {
     /** 覆盖模型 id（留空=宿主默认）。 */
     model: string;
     /** 日志级别。 */
+    /** 运行心跳日志：每 N 分钟打一条状态（0=关闭） */
+    heartbeatMinutes: number;
     logLevel: 'debug' | 'info' | 'warn';
     memoryEnabled: boolean;
     memoryBackend: 'mnemon' | 'file';

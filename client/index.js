@@ -67,6 +67,7 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'agentPreset', label: 'Agent 预设（留空=宿主默认）', kind: 'text' },
         { key: 'provider', label: '模型 provider（留空=宿主默认）', kind: 'text' },
         { key: 'model', label: '模型 id（留空=宿主默认）', kind: 'text' },
+        { key: 'heartbeatMinutes', label: '运行心跳：每 N 分钟打一条状态摘要（默认 10，0=关闭）', kind: 'number' },
         { key: 'logLevel', label: '日志级别', kind: 'select', options: [['info', 'info'], ['debug', 'debug'], ['warn', 'warn']] },
         { key: 'memoryEnabled', label: '群记忆：开启（最近对话缓冲 + 长期记忆）', kind: 'boolean' },
         { key: 'memoryBackend', label: '长期记忆后端', kind: 'select', options: [['mnemon', 'mnemon：每群一个记忆空间'], ['file', 'file：纯本地文件，不碰 mnemon']] },

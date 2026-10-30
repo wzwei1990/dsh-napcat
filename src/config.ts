@@ -72,6 +72,8 @@ export interface Config {
   /** 覆盖模型 id（留空=宿主默认）。 */
   model: string
   /** 日志级别。 */
+  /** 运行心跳日志：每 N 分钟打一条状态（0=关闭） */
+  heartbeatMinutes: number
   logLevel: 'debug' | 'info' | 'warn'
   memoryEnabled: boolean
   memoryBackend: 'mnemon' | 'file'
@@ -170,6 +172,7 @@ export const Config: Z<Config> = z.object({
     .description('覆盖模型 provider；留空=宿主默认').volatile(),
   model: z.string().default('')
     .description('覆盖模型 id；留空=宿主默认').volatile(),
+  heartbeatMinutes: z.natural().default(10).description('运行心跳：每 N 分钟打一条状态摘要（0=关闭）').volatile(),
   logLevel: z.union([z.const('debug'), z.const('info'), z.const('warn')]).default('info')
     .description('日志级别').volatile(),
   memoryEnabled: z.boolean().default(true).description('开启群记忆（最近对话缓冲 + 长期记忆）').volatile(),
@@ -237,6 +240,7 @@ export const DEFAULTS: Config = {
   agentPreset: '',
   provider: '',
   model: '',
+  heartbeatMinutes: 10,
   logLevel: 'info',
   memoryEnabled: true,
   memoryAutoCapture: true,

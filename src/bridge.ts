@@ -34,7 +34,7 @@ import { buildArchivePrompt, parseArchivePayload, type ArchivePayload } from './
 import { faceFor } from './faces.js'
 import { defaultMemeDirs, MemeLibrary, readMemeSettings } from './meme.js'
 import { localToBase64Url } from './media.js'
-import { decide, FRESH_SECONDS, HOT_WINDOW_MS, maxPerHourOf, newChatState, parseQuietHours, pruneSentAt, windowMsOf, type ChatProactiveState } from './proactive.js'
+import { decide, FRESH_SECONDS, HOT_WINDOW_MS, inQuietHours, maxPerHourOf, newChatState, parseQuietHours, pruneSentAt, windowMsOf, type ChatProactiveState } from './proactive.js'
 import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, base64UrlToBuffer, downloadToFile, ensureInbox, imageMediaType, nameFromRef } from './media.js'
 import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
@@ -125,6 +125,10 @@ export class Bridge {
     this.archiveTimer = setInterval(() => { void this.archiveTick() }, 60_000)
     // 主动发言：每 60 秒补一次评估（冷清群靠消息触发会很久才掷一次骰子）
     this.proactiveTimer = setInterval(() => { void this.proactiveTick() }, 60_000)
+    // 运行心跳：即使什么也没发生，也每 N 分钟打一条状态摘要
+    this.stats.startedAt = Date.now()
+    this.stats.lastHeartbeatAt = Date.now()
+    this.heartbeatTimer = setInterval(() => { this.heartbeatTick() }, 60_000)
     setTimeout(() => { void this.archiveTick() }, 5_000)
     void this.restoreArchivePending()
     void this.logMemeLibrary()
@@ -141,6 +145,10 @@ export class Bridge {
     if (this.proactiveTimer !== undefined) {
       clearInterval(this.proactiveTimer)
       this.proactiveTimer = undefined
+    }
+    if (this.heartbeatTimer !== undefined) {
+      clearInterval(this.heartbeatTimer)
+      this.heartbeatTimer = undefined
     }
     this.sessionEventOff?.()
     this.sessionEventOff = undefined
@@ -279,6 +287,21 @@ export class Bridge {
   private archiveTimer: ReturnType<typeof setInterval> | undefined
   /** 主动发言的定时评估器（每 60 秒扫一遍有动静的群） */
   private proactiveTimer: ReturnType<typeof setInterval> | undefined
+  /** 运行心跳：每 N 分钟打一条状态摘要（用来区分"没人说话"和"出故障了"） */
+  private heartbeatTimer: ReturnType<typeof setInterval> | undefined
+  private readonly stats = {
+    startedAt: Date.now(),
+    messages: 0,
+    groupMessages: 0,
+    privateMessages: 0,
+    dispatched: 0,
+    sent: 0,
+    proactiveSent: 0,
+    proactiveSkipped: 0,
+    lastMessageAt: 0,
+    lastHeartbeatAt: 0,
+    quietWarnedAt: 0,
+  }
   private readonly archiveAgents = new Map<string, { agent: Agent; dispose(): Promise<void> }>()
   private readonly archiveRunning = new Set<string>()
   private readonly archiveLastActivity = new Map<string, number>()
@@ -318,6 +341,49 @@ export class Bridge {
         this.chatter.set(ref.key, merged)
       })
       this.chatterReady.set(ref.key, seeding.then(() => undefined, () => undefined))
+    }
+  }
+
+  /**
+   * 运行心跳（每 60 秒检查一次，按配置间隔打一条 info）：
+   * 回答"现在到底什么情况"——连没连上、收了多少消息、回复了几轮、主动发言开没开。
+   */
+  private heartbeatTick(): void {
+    const minutes = Math.floor(this.opts.config.heartbeatMinutes)
+    if (minutes <= 0) return
+    const now = Date.now()
+    if (now - this.stats.lastHeartbeatAt < minutes * 60_000) return
+    this.stats.lastHeartbeatAt = now
+    const upMin = Math.round((now - this.stats.startedAt) / 60_000)
+    const connected = this.opts.conn.connected
+    const idleSec = this.stats.lastMessageAt === 0
+      ? Math.round((now - this.stats.startedAt) / 1000)
+      : Math.round((now - this.stats.lastMessageAt) / 1000)
+    const cfg = this.opts.config
+    const proactive = cfg.proactiveEnabled
+      ? '开(λ=' + cfg.proactiveRatePerHour + '，已发 ' + this.stats.proactiveSent + '，跳过 ' + this.stats.proactiveSkipped + ')'
+      : '关'
+    this.opts.log('info', '[心跳] 运行 ' + upMin + ' 分钟 · NapCat ' + (connected ? '已连接' : '未连接')
+      + ' · 收消息 ' + this.stats.messages + '（群 ' + this.stats.groupMessages + ' / 私聊 ' + this.stats.privateMessages + '）'
+      + ' · 已回复 ' + this.stats.sent + ' 轮 · 主动发言 ' + proactive
+      + ' · 距上条消息 ' + idleSec + ' 秒 · 会话 ' + this.chats.size + ' 个')
+    // 连着却长时间没消息：最常见的故障（NapCat 没把群消息上报过来）。
+    // 三段门避免夜里/静默时段误报：
+    //   ① 静默时段（proactiveQuietHours，默认 00:00-08:00）不告警
+    //   ② 从没收到过任何消息不告警（刚启动/刚装，那是配置问题不是故障）
+    //   ③ 距上次告警至少 30 分钟
+    const nowLocal = new Date(now)
+    const quietNow = inQuietHours(nowLocal.getHours() * 60 + nowLocal.getMinutes(), parseQuietHours(cfg.proactiveQuietHours))
+    if (
+      connected
+      && !quietNow
+      && this.stats.messages > 0
+      && idleSec > Math.max(1800, minutes * 120)
+      && now - this.stats.quietWarnedAt > 30 * 60_000
+    ) {
+      this.stats.quietWarnedAt = now
+      this.opts.log('warn', '连接正常但已经 ' + Math.round(idleSec / 60) + ' 分钟没收到任何消息：'
+        + '检查 NapCat 是否把群消息上报给了这个插件（允许的群 / 上报事件类型）')
     }
   }
 
@@ -1107,6 +1173,10 @@ export class Bridge {
       }
     }
     // 主动发言：记录"有人在聊"，判定推迟到门控之后（被 @ 时不插话）
+    this.stats.messages += 1
+    this.stats.lastMessageAt = Date.now()
+    if (ref.kind === 'group') this.stats.groupMessages += 1
+    else this.stats.privateMessages += 1
     this.noteChatter(ref)
 
     if (ref.kind === 'group' && this.opts.config.requireMention) {
@@ -1734,6 +1804,7 @@ export class Bridge {
         content: [...blocks, { type: 'text', text }],
         source: { kind: 'plugin:dsh-napcat' },
       }))
+      this.stats.dispatched += 1
       this.opts.log('info', '已投递到模型: ' + chat.ref.key + ' (' + text.length + ' 字)')
     } catch (error) {
       this.opts.log('warn', '投递失败: ' + describe(error))
@@ -1865,6 +1936,7 @@ export class Bridge {
           state.lastSkipAt = now
           state.lastConsiderAt = now
           this.proactiveStates.set(key, state)
+          this.stats.proactiveSkipped += 1
           this.opts.log('info', '主动发言跳过（模型认为没必要）: ' + key + ' skipStreak=' + state.skipStreak)
           if (text === '' && reason.kind === 'error') {
             this.opts.log('debug', '主动发言轮次出错（忽略）: ' + reason.error.message)
@@ -1877,6 +1949,7 @@ export class Bridge {
         state.sentAt = pruneSentAt([...state.sentAt, now], now)
         state.lastConsiderAt = now
         this.proactiveStates.set(key, state)
+        this.stats.proactiveSent += 1
         this.opts.log('info', '主动发言已发出: ' + key + '（本小时第 ' + state.sentAt.length + ' 条）')
       }
       if (text !== '') {
@@ -2005,6 +2078,7 @@ export class Bridge {
       if (message.length === 0) continue
       const ok = await this.sendSegments(chat, message)
       if (!ok) return
+      this.stats.sent += 1
       this.opts.log('info', '已发送到 QQ: ' + chat.ref.key + '（' + parts.length + ' 段）')
       if (interval > 0 && index < groups.length - 1) {
         await new Promise(resolve => setTimeout(resolve, interval))

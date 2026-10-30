@@ -488,6 +488,7 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `proactiveQuietHours` | `00:00-08:00` | 静默时段（逗号分隔多段） |
 | `agentPreset` | `''` | 会话使用的 preset（留空=宿主默认） |
 | `provider` / `model` | `''` | 覆盖模型（留空=宿主默认模型） |
+| `heartbeatMinutes` | `10` | 运行心跳：每 N 分钟打一条状态摘要（连没连上 / 收了多少消息 / 主动发言开没开）（0=关闭） |
 | `logLevel` | `info` | `debug` 看投递/图片细节 |
 
 ## 工具（agent 可调用）

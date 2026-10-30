@@ -72,6 +72,9 @@ export declare class Bridge {
     private archiveTimer;
     /** 主动发言的定时评估器（每 60 秒扫一遍有动静的群） */
     private proactiveTimer;
+    /** 运行心跳：每 N 分钟打一条状态摘要（用来区分"没人说话"和"出故障了"） */
+    private heartbeatTimer;
+    private readonly stats;
     private readonly archiveAgents;
     private readonly archiveRunning;
     private readonly archiveLastActivity;
@@ -96,6 +99,11 @@ export declare class Bridge {
     private readonly proactiveEval;
     /** 记录一条他人消息（供主动发言判断"有没有人在聊"）。 */
     private noteChatter;
+    /**
+     * 运行心跳（每 60 秒检查一次，按配置间隔打一条 info）：
+     * 回答"现在到底什么情况"——连没连上、收了多少消息、回复了几轮、主动发言开没开。
+     */
+    private heartbeatTick;
     /**
      * 定时评估：冷清群不能只靠"来一条消息掷一次骰子"，否则十几分钟才评估一次。
      * 每 60 秒扫一遍最近还有动静的群，交给同一套决策（内部有 20 秒节流与各类硬门）。
