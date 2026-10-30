@@ -295,9 +295,12 @@ export class Bridge {
     groupMessages: 0,
     privateMessages: 0,
     dispatched: 0,
+    replyTurns: 0,
+    proactiveTurns: 0,
     sent: 0,
     proactiveSent: 0,
     proactiveSkipped: 0,
+    lastSelfSpokeAt: 0,
     proactiveEvalCount: 0,
     proactiveLastReason: '',
     proactiveLastEvalAt: 0,
@@ -363,17 +366,22 @@ export class Bridge {
       ? Math.round((now - this.stats.startedAt) / 1000)
       : Math.round((now - this.stats.lastMessageAt) / 1000)
     const cfg = this.opts.config
-    const proactive = cfg.proactiveEnabled
-      ? '开(λ=' + cfg.proactiveRatePerHour + '，评估 ' + this.stats.proactiveEvalCount + ' 次'
-        + (this.stats.proactiveEvalCount > 0
-          ? ' · 最后 ' + this.stats.proactiveLastReason + ' ' + Math.round((now - this.stats.proactiveLastEvalAt) / 1000) + ' 秒前'
-          : ' · 还没评估过')
-        + ' · 已发 ' + this.stats.proactiveSent + ' · 模型跳过 ' + this.stats.proactiveSkipped + ')'
-      : '关'
-    this.opts.log('info', '[心跳] 运行 ' + upMin + ' 分钟 · NapCat ' + (connected ? '已连接' : '未连接')
-      + ' · 收消息 ' + this.stats.messages + '（群 ' + this.stats.groupMessages + ' / 私聊 ' + this.stats.privateMessages + '）'
-      + ' · 已回复 ' + this.stats.sent + ' 轮 · 主动发言 ' + proactive
-      + ' · 距上条消息 ' + idleSec + ' 秒 · 会话 ' + this.chats.size + ' 个')
+    // 时刻比"距现在 N 秒"好读
+    const clockOf = (at: number): string => {
+      if (at === 0) return '无'
+      const d = new Date(at)
+      const pad = (n: number): string => String(n).padStart(2, '0')
+      return pad(d.getHours()) + ':' + pad(d.getMinutes())
+    }
+    // 心跳只讲人话：谁说了多少、我发了多少、最后活跃时刻。
+    // 主动发言的评估细节（评估次数 / 最后原因 / skipStreak）留给每 30 分钟的汇总行，避免这里塞太多数字。
+    this.opts.log('info', '[心跳] ' + (connected ? '在线' : 'NapCat 未连接')
+      + ' | 群消息 ' + this.stats.groupMessages + ' 条'
+      + (this.stats.privateMessages > 0 ? '（私聊 ' + this.stats.privateMessages + ' 条）' : '')
+      + ' | 我发了 ' + this.stats.sent + ' 条（回复 ' + this.stats.replyTurns + ' / 主动 ' + this.stats.proactiveTurns + '）'
+      + ' | 群最新 ' + clockOf(this.stats.lastMessageAt) + ' · 我最后 ' + clockOf(this.stats.lastSelfSpokeAt)
+      + ' | 会话 ' + this.chats.size + ' 个'
+      + ' | 主动发言 ' + (cfg.proactiveEnabled ? '开' : '关'))
     // 连着却长时间没消息：最常见的故障（NapCat 没把群消息上报过来）。
     // 三段门避免夜里/静默时段误报：
     //   ① 静默时段（proactiveQuietHours，默认 00:00-08:00）不告警
@@ -603,7 +611,7 @@ export class Bridge {
 
         + '③ 不要重复别人刚说过的内容，不要总结、不要列点、不要点名；④ 不要抛与本群历史和当前话题无关的新话题；\n'
         + '⑤ 拿不准或觉得这轮插话多余，就只回复 __SKIP__（三个下划线 + SKIP），我会丢弃这条。',
-        latestImage?.blocks ?? [], latestImage?.parts ?? [])
+        latestImage?.blocks ?? [], latestImage?.parts ?? [], 'proactive')
       this.opts.log('info', '主动发言已触发: ' + ref.key + '（' + decision.reason + '）')
     } catch (error) {
       this.pendingProactive.delete(ref.key)
@@ -1790,7 +1798,7 @@ export class Bridge {
     return dir
   }
 
-  private dispatch(chat: ChatState, text: string, blocks: ContentBlock[] = [], parts: Array<Record<string, unknown>> = []): void {
+  private dispatch(chat: ChatState, text: string, blocks: ContentBlock[] = [], parts: Array<Record<string, unknown>> = [], kind: 'reply' | 'proactive' = 'reply'): void {
     this.debugLog(chat.cwd, 'dispatch 进入 ref=' + chat.ref.key + ' text=' + text.length + '字 blocks=' + blocks.length + ' parts=' + parts.length)
     chat.buffer = []
     chat.lastText = text
@@ -1824,6 +1832,8 @@ export class Bridge {
         source: { kind: 'plugin:dsh-napcat' },
       }))
       this.stats.dispatched += 1
+      if (kind === 'proactive') this.stats.proactiveTurns += 1
+      else this.stats.replyTurns += 1
       this.opts.log('info', '已投递到模型: ' + chat.ref.key + ' (' + text.length + ' 字)')
     } catch (error) {
       this.opts.log('warn', '投递失败: ' + describe(error))
@@ -2101,6 +2111,7 @@ export class Bridge {
       const ok = await this.sendSegments(chat, message)
       if (!ok) return
       this.stats.sent += 1
+      this.stats.lastSelfSpokeAt = Date.now()
       this.opts.log('info', '已发送到 QQ: ' + chat.ref.key + '（' + parts.length + ' 段）')
       if (interval > 0 && index < groups.length - 1) {
         await new Promise(resolve => setTimeout(resolve, interval))
