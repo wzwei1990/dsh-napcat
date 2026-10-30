@@ -24,6 +24,8 @@ export interface ProactiveOptions {
   quietHours: string
   /** 话题门槛：观察窗口内至少多少条他人消息才考虑插话（0 = 不设门槛） */
   hotMessages: number
+  /** 冷场门：最后一条消息距今超过多少秒就不开口（默认 300；0 = 不限） */
+  freshSeconds?: number
 }
 
 /** 观察窗口 = max(5 分钟, 最小间隔)：间隔越长，看的窗口也越长（不再单独配）。 */
@@ -44,7 +46,7 @@ export function hotJumpThresholdOf(options: Pick<ProactiveOptions, 'hotMessages'
 }
 
 /** 冷场门固定 120 秒：最后一条消息超过它就说明群里已经安静了。 */
-export const FRESH_SECONDS = 120
+export const FRESH_SECONDS = 300
 
 export interface ChatProactiveState {
   /** 上次成功发言时间（ms） */
@@ -179,9 +181,10 @@ export function decide(input: {
     return { send: false, reason: 'not-enough-chatter' }
   }
 
-  // 冷场门（固定 120 秒）：最后一条消息太久以前 = 群里已经安静，别自言自语
-  if (input.lastMessageAt !== undefined && input.lastMessageAt > 0) {
-    if (now - input.lastMessageAt > FRESH_SECONDS * 1000) return { send: false, reason: 'stale-chat' }
+  // 冷场门：最后一条消息太久以前 = 群里已经安静，别自言自语（阈值可配，默认 300 秒）
+  const freshSeconds = options.freshSeconds ?? FRESH_SECONDS
+  if (freshSeconds > 0 && input.lastMessageAt !== undefined && input.lastMessageAt > 0) {
+    if (now - input.lastMessageAt > freshSeconds * 1000) return { send: false, reason: 'stale-chat' }
   }
 
   // 概率：优先泊松（自然间隔），否则固定 chance。

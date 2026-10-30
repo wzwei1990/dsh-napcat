@@ -23,6 +23,8 @@ export interface ProactiveOptions {
     quietHours: string;
     /** 话题门槛：观察窗口内至少多少条他人消息才考虑插话（0 = 不设门槛） */
     hotMessages: number;
+    /** 冷场门：最后一条消息距今超过多少秒就不开口（默认 300；0 = 不限） */
+    freshSeconds?: number;
 }
 /** 观察窗口 = max(5 分钟, 最小间隔)：间隔越长，看的窗口也越长（不再单独配）。 */
 export declare function windowMsOf(options: Pick<ProactiveOptions, 'cooldownMinutes'>): number;
@@ -32,7 +34,7 @@ export declare function maxPerHourOf(options: Pick<ProactiveOptions, 'cooldownMi
 export declare const HOT_WINDOW_MS: number;
 export declare function hotJumpThresholdOf(options: Pick<ProactiveOptions, 'hotMessages'>): number;
 /** 冷场门固定 120 秒：最后一条消息超过它就说明群里已经安静了。 */
-export declare const FRESH_SECONDS = 120;
+export declare const FRESH_SECONDS = 300;
 export interface ChatProactiveState {
     /** 上次成功发言时间（ms） */
     lastSpokeAt: number;

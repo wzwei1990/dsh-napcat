@@ -87,6 +87,8 @@ export interface Config {
     /** 热点跳队：冷却期内突然爆话题允许提前插一次（一小时最多一次） */
     /** 话题门槛：窗口内至少多少条他人消息才考虑插话 */
     proactiveHotMessages: number;
+    /** 冷场门：群里安静超过多少秒就不再主动开口（0=不限） */
+    proactiveFreshSeconds: number;
     memorySpacePrefix: string;
     memorySpaces: string;
     recentLimit: number;

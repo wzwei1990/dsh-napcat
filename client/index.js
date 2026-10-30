@@ -30,6 +30,8 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
 
       /** 设置页字段（与 src/config.ts 的 Config 一一对应）。 */
       const FIELDS = [
+        // ── 分组标题（渲染时按 section 画分隔线）──
+        { section: '连接' },
         { key: 'enabled', label: '启用 NapCat 连接（关掉后不连 NapCat、不处理消息）', kind: 'boolean' },
         { key: 'mode', label: '连接方式', kind: 'select', options: [['forward', 'forward：插件连 NapCat'], ['reverse', 'reverse：NapCat 拨入']] },
         { key: 'url', label: 'NapCat WebSocket 地址', kind: 'text', placeholder: 'ws://<napcat-host>:3001' },
@@ -37,6 +39,8 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'host', label: 'reverse 监听地址', kind: 'text', placeholder: '0.0.0.0（NapCat 在别的机器上）' },
         { key: 'port', label: 'reverse 监听端口', kind: 'number' },
         { key: 'botQQ', label: '机器人 QQ（留空自动学习）', kind: 'text' },
+        { key: 'reconnectMaxAttempts', label: '重连上限（0=无限）', kind: 'number' },
+        { section: '权限与安全' },
         { key: 'adminUsers', label: '管理员 QQ（逗号分隔）', kind: 'list' },
         { key: 'dangerPolicy', label: '危险操作策略（删除/删库/强推/格式化/清空记忆等）', kind: 'select', options: [['admin-only', 'admin-only：仅管理员可发起'], ['allow', 'allow：谁都能发'], ['off', 'off：不拦截']] },
         { key: 'dangerWords', label: '额外危险词（逗号分隔，包含即命中）', kind: 'list' },
@@ -46,12 +50,14 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'groupPolicy', label: '群聊策略', kind: 'select', options: [['allowlist', 'allowlist：仅白名单群'], ['open', 'open：任何群'], ['disabled', 'disabled：关闭']] },
         { key: 'groupAllowFrom', label: '允许的群号（逗号分隔）', kind: 'list' },
         { key: 'requireMention', label: '群聊必须 @机器人 才响应（关掉=任何群消息都进模型）', kind: 'boolean' },
-  { key: 'triggerKeywords', label: '群聊关键字触发（逗号分隔；命中就响应，不要求 @）', kind: 'list' },
+        { key: 'triggerKeywords', label: '群聊关键字触发（逗号分隔；命中就响应，不要求 @）', kind: 'list' },
         { key: 'ignoreSelf', label: '忽略机器人自己的消息', kind: 'boolean' },
+        { section: '回复方式' },
         { key: 'replyAsQuote', label: '回复时引用原消息', kind: 'boolean' },
         { key: 'splitMaxChars', label: '单条消息最大字数（0=不分段）', kind: 'number' },
         { key: 'sendIntervalMs', label: '分段消息间隔（毫秒，防 QQ 风控）', kind: 'number' },
         { key: 'dryRun', label: '只读模式：不向 QQ 发送任何消息（本地测试用）', kind: 'boolean' },
+        { section: '表情包' },
         { key: 'memeEnabled', label: '把 [表情:描述] 解析成 dsh-meme 图库里的图发送', kind: 'boolean' },
         { key: 'faceFallback', label: '图库没图时用 QQ 原生小黄脸兜底', kind: 'boolean' },
         { key: 'memeDirs', label: '表情库目录（留空=自动扫描 DSH_HOME 下 dsh-meme）', kind: 'string' },
@@ -59,16 +65,22 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'memeLooseFallback', label: '匹配不到时也随机发一张图（默认关，避免不贴题）', kind: 'boolean' },
         { key: 'memeNudgeAfter', label: '连续几条回复没发表情就提醒模型带一个（0=不提醒）', kind: 'number' },
         { key: 'memeMinGap', label: '表情包最小间隔（几条文字后才可再发；0=不限制）', kind: 'number' },
+        { section: '图片与媒体' },
         { key: 'outboundImageMaxBytes', label: '单张待发送图片上限（字节，默认 8MB）', kind: 'number' },
-        { key: 'reconnectMaxAttempts', label: '重连上限（0=无限）', kind: 'number' },
+        { key: 'imageCache', label: '群聊图片缓存（存表情包/分享图，便于以后回看）', kind: 'select', options: [['off', 'off：只存叫到机器人时的图'], ['all', 'all：群里的图也存（带配额）']] },
+        { key: 'imageCacheMaxBytes', label: '单张图片缓存上限（字节）', kind: 'number' },
+        { key: 'imageCacheDailyCap', label: '每个聊天每天最多缓存张数', kind: 'number' },
+        { key: 'imageCacheRetentionDays', label: '图片缓存保留天数（超期清理）', kind: 'number' },
+        { key: 'warmupImages', label: '预热时也缓存历史图片（file id 失效则标记已过期）', kind: 'boolean' },
+        { key: 'warmupImageLimit', label: '单次预热最多下载几张历史图片（默认 30）', kind: 'number' },
+        { section: '会话与模型' },
         { key: 'workspacePath', label: '会话工作区路径（留空=宿主 cwd）', kind: 'text' },
-  { key: 'perChatWorkspace', label: '每个会话用独立子目录（workspacePath/napcat/<群号或QQ>）', kind: 'boolean' },
-  { key: 'personaOverrides', label: '群/人性格（每行 group:<群号>=<人设> 或 private:<QQ>=<人设>）', kind: 'textarea', placeholder: 'group:123456=你是群宠小灯，语气活泼\nprivate:10001=你是我的私人助理，正式一点' },
+        { key: 'perChatWorkspace', label: '每个会话用独立子目录（workspacePath/napcat/<群号或QQ>）', kind: 'boolean' },
+        { key: 'personaOverrides', label: '群/人性格（每行 group:<群号>=<人设> 或 private:<QQ>=<人设>）', kind: 'textarea', placeholder: 'group:123456=你是群宠小灯，语气活泼\nprivate:10001=你是我的私人助理，正式一点' },
         { key: 'agentPreset', label: 'Agent 预设（留空=宿主默认）', kind: 'text' },
         { key: 'provider', label: '模型 provider（留空=宿主默认）', kind: 'text' },
         { key: 'model', label: '模型 id（留空=宿主默认）', kind: 'text' },
-        { key: 'heartbeatMinutes', label: '运行心跳：每 N 分钟打一条状态摘要（默认 10，0=关闭）', kind: 'number' },
-        { key: 'logLevel', label: '日志级别', kind: 'select', options: [['info', 'info'], ['debug', 'debug'], ['warn', 'warn']] },
+        { section: '记忆' },
         { key: 'memoryEnabled', label: '群记忆：开启（最近对话缓冲 + 长期记忆）', kind: 'boolean' },
         { key: 'memoryBackend', label: '长期记忆后端', kind: 'select', options: [['mnemon', 'mnemon：每群一个记忆空间'], ['file', 'file：纯本地文件，不碰 mnemon']] },
         { key: 'memorySpacePrefix', label: '记忆空间名前缀（mnemon 模式）', kind: 'text', placeholder: 'napcat-' },
@@ -76,21 +88,21 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'injectRecent', label: '每次触发注入最近对话条数', kind: 'number' },
         { key: 'injectMaxChars', label: '记忆注入字符上限', kind: 'number' },
         { key: 'warmupStaleMinutes', label: '预热新鲜度：最新一条超过多少分钟视为过期', kind: 'number' },
+        { section: '归档' },
         { key: 'archiveEvery', label: '归档节奏：攒够多少条消息蒸馏一次摘要/人物卡（0=关闭）', kind: 'number' },
         { key: 'archiveIdleMinutes', label: '群空闲多少分钟后起一轮独立归档（分钟）', kind: 'number' },
         { key: 'archiveEventDays', label: '事件类记忆保留天数（到期自动淡出）', kind: 'number' },
         { key: 'peopleLimit', label: '人物表上限（0=不限制）', kind: 'number' },
-        { key: 'warmupImages', label: '预热时也缓存历史图片（file id 失效则标记已过期）', kind: 'boolean' },
-        { key: 'warmupImageLimit', label: '单次预热最多下载几张历史图片（默认 30）', kind: 'number' },
+        { section: '主动发言' },
         { key: 'proactiveEnabled', label: '主动发言（伪人模式）：群里有话题时自己插话', kind: 'boolean' },
         { key: 'proactiveRatePerHour', label: '主动发言频率 λ（次/小时，0=不主动）', kind: 'number' },
         { key: 'proactiveCooldownMinutes', label: '两次主动发言最小间隔（分钟）· 同时决定观察窗口与每小时上限', kind: 'number' },
-        { key: 'proactiveQuietHours', label: '主动发言静默时段（如 00:00-08:00,12:00-13:00）', kind: 'text' },
         { key: 'proactiveHotMessages', label: '话题门槛（观察窗口内至少多少条他人消息才考虑插话）', kind: 'number' },
-        { key: 'imageCache', label: '群聊图片缓存（存表情包/分享图，便于以后回看）', kind: 'select', options: [['off', 'off：只存叫到机器人时的图'], ['all', 'all：群里的图也存（带配额）']] },
-        { key: 'imageCacheMaxBytes', label: '单张图片缓存上限（字节）', kind: 'number' },
-        { key: 'imageCacheDailyCap', label: '每个聊天每天最多缓存张数', kind: 'number' },
-        { key: 'imageCacheRetentionDays', label: '图片缓存保留天数（超期清理）', kind: 'number' },
+        { key: 'proactiveFreshSeconds', label: '冷场门：群里安静超过多少秒就不再主动开口（0=不限）', kind: 'number' },
+        { key: 'proactiveQuietHours', label: '主动发言静默时段（如 00:00-08:00,12:00-13:00）', kind: 'text' },
+        { section: '运行与日志' },
+        { key: 'heartbeatMinutes', label: '运行心跳：每 N 分钟打一条状态摘要（默认 10，0=关闭）', kind: 'number' },
+        { key: 'logLevel', label: '日志级别', kind: 'select', options: [['info', 'info'], ['debug', 'debug'], ['warn', 'warn']] },
       ]
 
       const NS = 'dsh-napcat'
@@ -297,13 +309,25 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
           react.createElement('p', { style: style.hint },
             '保存后写入 profile 的 cordis.patch.yml 并热重载插件。' +
             (revision === undefined ? '' : ' 当前 revision：' + revision)),
-          FIELDS.map((field) => renderField(field, draft[field.key], (key, value) => {
-            setDraft((previous) => {
-              const nextDraft = Object.assign({}, previous)
-              nextDraft[key] = value
-              return nextDraft
+          FIELDS.map((field) => {
+            // 分组标题：只画一条分隔线 + 标题，不占配置项
+            if (field.section !== undefined) {
+              return react.createElement('div', {
+                key: 'section:' + field.section,
+                style: { marginTop: '18px', paddingTop: '10px', borderTop: '1px solid var(--dsw-alias-border-l1, #e5e5e5)' },
+              },
+                react.createElement('div', {
+                  style: { fontWeight: 600, fontSize: '13px', color: 'var(--dsw-alias-label-secondary, #555)' },
+                }, field.section))
+            }
+            return renderField(field, draft[field.key], (key, value) => {
+              setDraft((previous) => {
+                const nextDraft = Object.assign({}, previous)
+                nextDraft[key] = value
+                return nextDraft
+              })
             })
-          })),
+          }),
           react.createElement('div', { style: style.bar },
             react.createElement('button', { style: style.primary, onClick: () => void save() }, '保存'),
             react.createElement('button', { style: style.btn, onClick: () => void load() }, '重新读取'),
