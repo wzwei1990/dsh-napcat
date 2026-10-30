@@ -1,6 +1,6 @@
 {
   "name": "dsh-napcat",
-  "version": "0.3.53",
+  "version": "0.3.54",
   "description": "NapCat / OneBot 11 通道插件：把 DeepSeek Harness 变成 QQ 机器人（私聊 + 群聊、@门控、白名单、长文分段、工具主动发送、设置页配置）。",
   "type": "module",
   "main": "lib/index.js",
@@ -19,16 +19,38 @@
     "lib",
     "client",
     "cordis.patch.yml",
-    "dsh.plugin.json"
+    "dsh.plugin.json",
+    "scripts"
   ],
-  "keywords": ["dsh", "deepseek-harness", "harness", "napcat", "onebot", "onebot11", "qq", "qqbot", "channel", "chatbot"],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "harness",
+    "napcat",
+    "onebot",
+    "onebot11",
+    "qq",
+    "qqbot",
+    "channel",
+    "chatbot"
+  ],
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/wzwei1990/dsh-napcat.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wzwei1990/dsh-napcat.git"
+  },
   "homepage": "https://github.com/wzwei1990/dsh-napcat#readme",
-  "bugs": { "url": "https://github.com/wzwei1990/dsh-napcat/issues" },
-  "engines": { "dsh": ">=0.2.1-0 <0.3.0-0", "node": ">=22" },
+  "bugs": {
+    "url": "https://github.com/wzwei1990/dsh-napcat/issues"
+  },
+  "engines": {
+    "dsh": ">=0.2.1-0 <0.3.0-0",
+    "node": ">=22"
+  },
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "inject": [
@@ -46,7 +68,9 @@
     "@deepseek-ai/dsh-tools": ">=0.2.1-0 <0.3.0-0",
     "@deepseek-ai/schemastery": "^3.18.0"
   },
-  "dependencies": { "ws": "^8.18.0" },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/ws": "^8.5.12",
@@ -63,6 +87,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test \"test/**/*.test.mjs\"",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "typecheck:latest": "node scripts/check-latest-host.mjs"
   }
 }

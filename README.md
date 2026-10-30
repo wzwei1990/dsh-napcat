@@ -568,3 +568,16 @@ client/
 ## License
 
 MIT
+
+## 宿主版本兼容策略
+
+**只保证「当前版 + 最新版」两代兼容**（更早的 rc 不追）。
+
+| 检查 | 命令 | 说明 |
+|---|---|---|
+| 对当前已装宿主 | `npm run typecheck` | 与 devDependencies（目前 `0.2.1-rc.2`）比对 |
+| 对 npm 最新宿主 | `npm run typecheck:latest` | 临时目录装 `@latest` 的类型再 typecheck（目前 `0.2.1-rc.5`） |
+
+两者都过才算兼容。之所以不直接把 devDependencies 升到最新：上游这些包的 `peerDependencies` 钉死在具体 rc 上，硬升会让 npm 连带删掉中间传递依赖（例如 `@deepseek-ai/dsh-scope`），本地依赖树直接坏掉。所以采用「本地跟随已装版本 + 另开临时目录验最新版」的方式。
+
+`scripts/check-latest-host.mjs` 也可以指定版本：`node scripts/check-latest-host.mjs 0.2.1-rc.5`。

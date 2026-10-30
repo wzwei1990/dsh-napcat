@@ -298,6 +298,9 @@ export class Bridge {
     sent: 0,
     proactiveSent: 0,
     proactiveSkipped: 0,
+    proactiveEvalCount: 0,
+    proactiveLastReason: '',
+    proactiveLastEvalAt: 0,
     lastMessageAt: 0,
     lastHeartbeatAt: 0,
     quietWarnedAt: 0,
@@ -361,7 +364,11 @@ export class Bridge {
       : Math.round((now - this.stats.lastMessageAt) / 1000)
     const cfg = this.opts.config
     const proactive = cfg.proactiveEnabled
-      ? '开(λ=' + cfg.proactiveRatePerHour + '，已发 ' + this.stats.proactiveSent + '，跳过 ' + this.stats.proactiveSkipped + ')'
+      ? '开(λ=' + cfg.proactiveRatePerHour + '，评估 ' + this.stats.proactiveEvalCount + ' 次'
+        + (this.stats.proactiveEvalCount > 0
+          ? ' · 最后 ' + this.stats.proactiveLastReason + ' ' + Math.round((now - this.stats.proactiveLastEvalAt) / 1000) + ' 秒前'
+          : ' · 还没评估过')
+        + ' · 已发 ' + this.stats.proactiveSent + ' · 模型跳过 ' + this.stats.proactiveSkipped + ')'
       : '关'
     this.opts.log('info', '[心跳] 运行 ' + upMin + ' 分钟 · NapCat ' + (connected ? '已连接' : '未连接')
       + ' · 收消息 ' + this.stats.messages + '（群 ' + this.stats.groupMessages + ' / 私聊 ' + this.stats.privateMessages + '）'
@@ -483,6 +490,13 @@ export class Bridge {
       recentHot: (this.chatter.get(ref.key) ?? []).filter(at => now - at < HOT_WINDOW_MS).length,
       quietRanges: parseQuietHours(cfg.proactiveQuietHours),
     })
+    // 评估记账：心跳里能看到"到底有没有在跑、最后一次为什么没发"
+    this.stats.proactiveEvalCount += 1
+    this.stats.proactiveLastReason = decision.reason
+    this.stats.proactiveLastEvalAt = now
+    if (this.stats.proactiveEvalCount === 1) {
+      this.opts.log('info', '主动发言评估已启动: ' + ref.key + '（窗口内他人消息 ' + recentOthers + ' 条）')
+    }
     state.lastConsiderAt = now
     if (decision.send && state.lastSpokeAt !== 0 && now - state.lastSpokeAt < cfg.proactiveCooldownMinutes * 60_000) {
       // 冷却期内还能发，说明走的是热点跳队：记时间，一小时只允许一次
@@ -1920,7 +1934,10 @@ export class Bridge {
       if (text.trim() !== '') chat.buffer.push(text.trim())
       return
     }
-    if (event.type === 'assistant/attempt') {
+    // 兼容宿主 0.2.1-rc.2 ~ rc.5：rc.5 起 session 事件联合类型里没有 'assistant/attempt'，
+    // 用 string 比较，运行时按事件类型字符串判断（两版都安全）。
+    const eventType = event.type as string
+    if (eventType === 'assistant/attempt') {
       const stream = (event.data as { stream?: unknown }).stream
       this.opts.log('warn', '一次模型尝试未提交（无正式回复）: ' + JSON.stringify(stream ?? {}).slice(0, 400))
       return
