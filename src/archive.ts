@@ -165,7 +165,7 @@ function pickDated(value: unknown, limit: number): Array<{ text: string; when?: 
 }
 
 /** 从模型输出里抠出第一个合法 JSON 对象（容忍代码围栏、前后杂字、<归档> 包装）。 */
-export function parseArchivePayload(text: string): ArchivePayload | undefined {
+export function parseArchivePayload(text: string, peopleLimit = 0): ArchivePayload | undefined {
   const candidates: string[] = []
   const tagRe = /<\s*(?:归档|archive)\s*>([\s\S]*?)<\s*\/\s*(?:归档|archive)\s*>/gi
   for (const match of text.matchAll(tagRe)) candidates.push(match[1] ?? '')
@@ -189,7 +189,9 @@ export function parseArchivePayload(text: string): ArchivePayload | undefined {
     }
     if (Array.isArray(record.people)) {
       const people: Array<{ name: string; style?: string; topics?: string[]; weight?: number }> = []
-      for (const raw of record.people.slice(0, 8)) {
+      // peopleLimit=0（默认）= 不设上限：以前这里写死 8，导致人物永远停在 8 位
+    const peopleCap = peopleLimit > 0 ? peopleLimit : 100
+    for (const raw of record.people.slice(0, peopleCap)) {
         if (raw === null || typeof raw !== 'object') continue
         const item = raw as Record<string, unknown>
         const name = typeof item.name === 'string' ? item.name.trim() : ''

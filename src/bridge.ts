@@ -850,7 +850,7 @@ export class Bridge {
         source: { kind: 'plugin:dsh-napcat' },
       }))
     }, 180_000)
-    const payload = text.trim() === '' ? undefined : parseArchivePayload(text)
+    const payload = text.trim() === '' ? undefined : parseArchivePayload(text, peopleLimit)
     if (payload === undefined) {
       const misses = this.bumpArchiveMiss(key)
       this.opts.log('warn', '归档轮没产出合法 JSON（连续第 ' + misses + ' 次），片段: ' + text.slice(0, 160).replace(/\s+/g, ' '))

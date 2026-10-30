@@ -849,3 +849,12 @@ test('主动发言：冷却期默认闭嘴，但爆话题时可以跳队（一�
   assert.equal(used.reason, 'cooldown')
   // 关掉热点跳队 → 一律拦
 })
+test('归档解析：人物不设上限时不该被截成 8 个', async () => {
+  const { parseArchivePayload } = await import('../lib/archive.js')
+  const people = Array.from({ length: 12 }, (_, i) => ({ name: '角色' + (i + 1), style: '说话风格' + (i + 1), weight: 3 }))
+  const json = JSON.stringify({ summary: '在聊配队', people, glossary: [], setting: [] })
+  const unlimited = parseArchivePayload(json, 0)
+  assert.equal(unlimited.people.length, 12)
+  const capped = parseArchivePayload(json, 5)
+  assert.equal(capped.people.length, 5)
+})

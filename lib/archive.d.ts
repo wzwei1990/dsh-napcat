@@ -61,6 +61,6 @@ export declare function buildArchivePrompt(input: {
     peopleLimit?: number;
 }): string;
 /** 从模型输出里抠出第一个合法 JSON 对象（容忍代码围栏、前后杂字、<归档> 包装）。 */
-export declare function parseArchivePayload(text: string): ArchivePayload | undefined;
+export declare function parseArchivePayload(text: string, peopleLimit?: number): ArchivePayload | undefined;
 /** weight(1~5) → 0~1 的重要性分。 */
 export declare function weightToScore(weight: number | undefined, fallback?: number): number;
