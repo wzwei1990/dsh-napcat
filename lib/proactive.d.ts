@@ -6,28 +6,46 @@
  *   （p = 1 - e^(-λ·t)，λ = 每小时期望次数），间隔自然不均；带冷却与静默时段。
  * - koishi-plugin-imx：复读插话用 threshold + chance（0~1）双层控制。
  * - chat-learning：同一内容重复回复有冷却，且按群隔离。
- * - QQ 官方主动消息频控：每群 20 qpm、1000 条/群/天 → 我们保守得多（每小时 ≤ 3 条）。
+ * - QQ 官方主动消息频控：每群 20 qpm、1000 条/群/天 → 我们保守得多。
+ *
+ * 配置只留 5 个（其余全部由这 5 个推导，避免互相打架）：
+ *   开关 / 频率 λ / 最小间隔 / 静默时段 / 话题门槛
  *
  * 本文件只做**判定**，不发送任何消息；发送与 __SKIP__ 拦截在 bridge 里。
  */
 export interface ProactiveOptions {
     enabled: boolean;
-    /** 泊松 λ：每小时期望主动次数（0 = 用固定概率模式） */
+    /** 泊松 λ：每小时期望主动次数（0 = 不主动） */
     ratePerHour: number;
-    /** 固定概率模式：每条群消息触发一次掷骰（0~1；ratePerHour>0 时不用它） */
-    chance: number;
-    /** 两次主动发言的最小间隔（分钟） */
+    /** 两次主动发言的最小间隔（分钟）；同时决定观察窗口与每小时上限 */
     cooldownMinutes: number;
-    /** 每小时上限 */
-    maxPerHour: number;
     /** 静默时段，如 "00:00-08:00,12:00-13:00" */
     quietHours: string;
-    /** 近窗口内至少多少条他人消息才考虑（太少=没人聊，别插话） */
-    minMessages: number;
-    /** 观察窗口（分钟） */
-    windowMinutes: number;
-    /** 最后一条他人消息距今超过多少秒就不再开口（默认 120；0=不限） */
-    freshSeconds?: number;
+    /** 话题门槛：观察窗口内至少多少条他人消息才考虑插话（0 = 不设门槛） */
+    hotMessages: number;
+}
+/** 观察窗口 = max(5 分钟, 最小间隔)：间隔越长，看的窗口也越长（不再单独配）。 */
+export declare function windowMsOf(options: Pick<ProactiveOptions, 'cooldownMinutes'>): number;
+/** 每小时上限由最小间隔推导：间隔 10 分钟 → 6 条/小时（另加 1 次热点跳队）。 */
+export declare function maxPerHourOf(options: Pick<ProactiveOptions, 'cooldownMinutes'>): number;
+/** 热点窗口固定 3 分钟；跳队阈值 = 门槛 × 1.5（不低于 6 条）。 */
+export declare const HOT_WINDOW_MS: number;
+export declare function hotJumpThresholdOf(options: Pick<ProactiveOptions, 'hotMessages'>): number;
+/** 冷场门固定 120 秒：最后一条消息超过它就说明群里已经安静了。 */
+export declare const FRESH_SECONDS = 120;
+export interface ChatProactiveState {
+    /** 上次成功发言时间（ms） */
+    lastSpokeAt: number;
+    /** 最近一小时内的发言时间（ms） */
+    sentAt: number[];
+    /** 连续被模型 __SKIP__ 的次数（用于退避） */
+    skipStreak: number;
+    /** 上次跳过的时间（ms）；太久没跳过就把退避清零，避免永久变安静 */
+    lastSkipAt?: number;
+    /** 上次热点跳队的时间（ms）：一小时最多跳一次 */
+    hotJumpAt?: number;
+    /** 上次"考虑"的时间（ms） */
+    lastConsiderAt: number;
 }
 export interface ChatProactiveState {
     /** 上次成功发言时间（ms） */
@@ -38,6 +56,8 @@ export interface ChatProactiveState {
     skipStreak: number;
     /** 上次跳过的时间（ms）；太久没跳过就把退避清零，避免永久变安静 */
     lastSkipAt?: number;
+    /** 上次热点跳队的时间（ms）：一小时最多跳一次 */
+    hotJumpAt?: number;
     /** 上次"考虑"的时间（ms） */
     lastConsiderAt: number;
 }
@@ -73,6 +93,8 @@ export declare function decide(input: {
     recentOthers: number;
     /** 最后一条他人消息的时间（ms）：群里刚还在聊才考虑开口 */
     lastMessageAt?: number;
+    /** 热点窗口内的消息条数（判断是否突然爆话题） */
+    recentHot?: number;
     random?: () => number;
     quietRanges?: ReadonlyArray<[number, number]>;
 }): Decision;

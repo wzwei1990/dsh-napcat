@@ -222,14 +222,29 @@ imageCacheRetentionDays: 7      # 超期目录自动清理
 
 ### 判定链（全部通过才考虑插话）
 
-| 关卡 | 说明 | 配置 |
+只有 **5 个配置字段**，其它门槛全部由它们推导，避免"多个旋钮互相打架"：
+
+| 字段 | 说明 | 默认 |
 |---|---|---|
-| 开启 | 总开关 | `proactiveEnabled` |
-| 静默时段 | 如凌晨不说话 | `proactiveQuietHours`（`00:00-08:00,12:00-13:00`）|
-| 冷却 | 距上次发言至少 N 分钟 | `proactiveCooldownMinutes`（默认 30）|
-| 每小时上限 | 防刷屏 | `proactiveMaxPerHour`（默认 3）|
-| 有人聊 | 近窗口内至少 K 条他人消息 | `proactiveMinMessages` / `proactiveWindowMinutes`（默认 3 条 / 5 分钟）|
-| 概率 | 泊松过程，间隔自然不均 | `proactiveRatePerHour`（λ，默认 1.5 次/小时；设 0 用 `proactiveChance` 固定概率）|
+| `proactiveEnabled` | 总开关 | `false` |
+| `proactiveRatePerHour` | 频率 λ（次/小时）；`0` = 不主动 | `3` |
+| `proactiveCooldownMinutes` | 两次之间至少隔多久；**同时推导观察窗口（max(5, 间隔)）与每小时上限（⌊60/间隔⌋+1）** | `10` |
+| `proactiveQuietHours` | 静默时段 | `00:00-08:00` |
+| `proactiveHotMessages` | 话题门槛：观察窗口内至少多少条他人消息才考虑；`0` = 不设门槛 | `3` |
+
+判定顺序：
+
+```
+静默时段 → 冷却（可被热点跳队破一次）→ 每小时上限 → 话题门槛 → 冷场门(120s) → 泊松掷骰(60s 一次)
+```
+
+由代码固定、不单独配置的三条：
+
+| 内置规则 | 值 | 为什么 |
+|---|---|---|
+| **冷场门** | 120 秒 | 最后一条消息太久以前就不插话，避免"自言自语" |
+| **热点跳队** | 3 分钟 ≥ 门槛×1.5 条，且一小时没用过 | 冷却期内突然爆话题时可以提前插一次，否则最热的几分钟永远被锁着 |
+| **热度加成** | 消息越多概率最高 ×3 | 热门群和冷清群不该同概率 |
 
 ### 结合历史与记忆，优先最近几条
 
@@ -334,16 +349,14 @@ dryRun: true     # 本地实例：只处理、只记日志，不向 QQ 发送任
 想立刻看到效果，临时用这组"测试参数"：
 
 ```yaml
-proactiveRatePerHour: 30      # 相当于每条群消息 ~3% 概率
+proactiveRatePerHour: 30      # 把频率调高，快速验证链路
 proactiveCooldownMinutes: 3
-proactiveMaxPerHour: 10
-proactiveMinMessages: 2
 ```
 
-日志会说明每次为什么不触发（每群 10 分钟最多一条）：
+日志会说明每次为什么不触发（每群 30 分钟最多一条）：
 
 ```
-主动发言暂不触发（距上次发言不足 15 分钟）: group:xxx
+主动发言暂不触发（距上次发言不足 10 分钟）: group:xxx
 主动发言暂不触发（近 5 分钟少于 2 条他人消息）: group:xxx
 主动发言已触发: group:xxx（poisson）
 主动发言跳过（模型认为没必要）: group:xxx skipStreak=1
@@ -367,12 +380,10 @@ proactiveMinMessages: 2
 
 ``yaml
 proactiveEnabled: true
-proactiveRatePerHour: 3        # 活跃群平均约每小时 1 次（受冷却与上限约束）
-proactiveCooldownMinutes: 15
-proactiveMaxPerHour: 3
+proactiveRatePerHour: 3        # 期望每小时 3 次（热门群会靠"热度加成"多给机会）
+proactiveCooldownMinutes: 10   # 同时决定观察窗口(10 分钟)与每小时上限(7 条)，默认已是 10
 proactiveQuietHours: "00:00-08:00"
-proactiveMinMessages: 2
-proactiveWindowMinutes: 5
+proactiveHotMessages: 3        # 10 分钟内至少 3 条他人消息才算"值得插话"（默认 3）
 ``
 
 
@@ -471,13 +482,10 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `imageCacheDailyCap` | `100` | 每个聊天每天最多缓存张数 |
 | `imageCacheRetentionDays` | `7` | 图片缓存保留天数（超期自动清理） |
 | `proactiveEnabled` | `false` | 主动发言（伪人模式）总开关 |
-| `proactiveRatePerHour` | `3` | 泊松 λ：每小时期望主动发言次数（0=改用固定概率） |
-| `proactiveChance` | `0.02` | 固定概率模式的插话概率（λ>0 时不生效） |
-| `proactiveCooldownMinutes` | `15` | 两次主动发言最小间隔 |
-| `proactiveMaxPerHour` | `4` | 每小时最多主动发言次数 |
+| `proactiveRatePerHour` | `3` | 频率 λ：每小时期望主动发言次数（0=不主动） |
+| `proactiveCooldownMinutes` | `10` | 两次最小间隔；同时推导观察窗口与每小时上限 |
+| `proactiveHotMessages` | `3` | 话题门槛：窗口内至少多少条他人消息才考虑（0=不限） |
 | `proactiveQuietHours` | `00:00-08:00` | 静默时段（逗号分隔多段） |
-| `proactiveMinMessages` | `2` | 窗口内至少多少条他人消息才考虑 |
-| `proactiveWindowMinutes` | `5` | 观察窗口（分钟） |
 | `agentPreset` | `''` | 会话使用的 preset（留空=宿主默认） |
 | `provider` / `model` | `''` | 覆盖模型（留空=宿主默认模型） |
 | `logLevel` | `info` | `debug` 看投递/图片细节 |

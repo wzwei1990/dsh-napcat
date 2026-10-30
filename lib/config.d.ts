@@ -79,14 +79,12 @@ export interface Config {
     imageCacheRetentionDays: number;
     proactiveEnabled: boolean;
     proactiveRatePerHour: number;
-    proactiveChance: number;
     proactiveCooldownMinutes: number;
-    proactiveMaxPerHour: number;
     proactiveQuietHours: string;
-    proactiveMinMessages: number;
-    proactiveWindowMinutes: number;
     /** 群里安静超过多少秒就不再主动开口（0=不限） */
-    proactiveFreshSeconds: number;
+    /** 热点跳队：冷却期内突然爆话题允许提前插一次（一小时最多一次） */
+    /** 话题门槛：窗口内至少多少条他人消息才考虑插话 */
+    proactiveHotMessages: number;
     memorySpacePrefix: string;
     memorySpaces: string;
     recentLimit: number;

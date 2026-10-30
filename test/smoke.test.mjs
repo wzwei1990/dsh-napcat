@@ -185,8 +185,7 @@ test('主动发言：静默时段 / 泊松 / 退避 / 门槛', () => {
   assert.equal(skipBackoffFactor(5), 0.5)
 
   const base = {
-    enabled: true, ratePerHour: 0, chance: 1, cooldownMinutes: 30,
-    maxPerHour: 3, quietHours: '', minMessages: 3, windowMinutes: 5,
+    enabled: true, ratePerHour: 50, cooldownMinutes: 1, quietHours: '', hotMessages: 3,
   }
   const now = Date.UTC(2026, 9, 23, 4, 0, 0)
   const ok = decide({ now, minuteOfDay: 600, options: base, state: newChatState(), recentOthers: 5, random: () => 0 })
@@ -833,4 +832,20 @@ test('链接话题提示：最近三条有 http 链接就提示先抓取', async
   assert.equal(linkHintOf(['今天天气不错', '吃了没']), '')
   // 只看最近三条：更早的链接不该触发
   assert.equal(linkHintOf(['https://old.example.com/x', 'a', 'b', 'c']), '')
+})
+test('主动发言：冷却期默认闭嘴，但爆话题时可以跳队（一小时一次）', async () => {
+  const base = {
+    enabled: true, ratePerHour: 50, cooldownMinutes: 10, quietHours: '', hotMessages: 1,
+  }
+  const now = Date.UTC(2026, 9, 30, 4, 0, 0)
+  const state = { lastSpokeAt: now - 60_000, sentAt: [now - 60_000], skipStreak: 0, hotJumpAt: 0, lastConsiderAt: now - 60_000 }
+  const cold = decide({ now, minuteOfDay: 700, options: base, state: { ...state }, recentOthers: 5, lastMessageAt: now - 10_000, recentHot: 2, random: () => 0 })
+  assert.equal(cold.reason, 'cooldown')
+  // 冷却中 + 爆话题（3 分钟 12 条）→ 允许（走后面的门，chance=1 必发）
+  const hot = decide({ now, minuteOfDay: 700, options: base, state: { ...state }, recentOthers: 12, lastMessageAt: now - 10_000, recentHot: 12, random: () => 0 })
+  assert.equal(hot.send, true)
+  // 一小时前刚跳过队 → 不许再跳
+  const used = decide({ now, minuteOfDay: 700, options: base, state: { ...state, hotJumpAt: now - 20 * 60_000 }, recentOthers: 12, lastMessageAt: now - 10_000, recentHot: 12, random: () => 0 })
+  assert.equal(used.reason, 'cooldown')
+  // 关掉热点跳队 → 一律拦
 })
