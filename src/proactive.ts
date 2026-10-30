@@ -27,6 +27,8 @@ export interface ProactiveOptions {
   minMessages: number
   /** 观察窗口（分钟） */
   windowMinutes: number
+  /** 最后一条他人消息距今超过多少秒就不再开口（默认 120；0=不限） */
+  freshSeconds?: number
 }
 
 export interface ChatProactiveState {
@@ -112,6 +114,8 @@ export function decide(input: {
   options: ProactiveOptions
   state: ChatProactiveState
   recentOthers: number
+  /** 最后一条他人消息的时间（ms）：群里刚还在聊才考虑开口 */
+  lastMessageAt?: number
   random?: () => number
   quietRanges?: ReadonlyArray<[number, number]>
 }): Decision {
@@ -132,8 +136,17 @@ export function decide(input: {
 
   if (input.recentOthers < options.minMessages) return { send: false, reason: 'not-enough-chatter' }
 
-  // 概率：优先泊松（自然间隔），否则固定 chance
-  const elapsed = state.lastConsiderAt === 0 ? options.windowMinutes * 60_000 : now - state.lastConsiderAt
+  // 新鲜度门：群里已经安静太久，这时候插话就是"自言自语"
+  const freshSeconds = options.freshSeconds ?? 120
+  if (freshSeconds > 0 && input.lastMessageAt !== undefined && input.lastMessageAt > 0) {
+    if (now - input.lastMessageAt > freshSeconds * 1000) return { send: false, reason: 'stale-chat' }
+  }
+
+  // 概率：优先泊松（自然间隔），否则固定 chance。
+  // elapsed 封顶 60 秒：空闲很久之后 elapsed 会把概率推到接近 1，表现为「憋一会儿然后连着说」；
+  // 封顶后每轮评估概率恒定，配合 60 秒定时评估 = 稳定速率（不再集中爆发）。
+  const elapsedRaw = state.lastConsiderAt === 0 ? 60_000 : now - state.lastConsiderAt
+  const elapsed = Math.min(60_000, Math.max(0, elapsedRaw))
   if (options.ratePerHour > 0) {
     const probability = poissonHit(options.ratePerHour * skipBackoffFactor(state.skipStreak), elapsed)
     return random() < probability ? { send: true, reason: 'poisson' } : { send: false, reason: 'poisson-miss' }

@@ -220,6 +220,11 @@ export declare class Bridge {
      * 不用手动调；`memeRecentLimit` 设正数则固定，设 0 则不避重。
      */
     private memeAvoidSet;
+    /**
+     * 在候选里挑一张"分数够、但不总是第一名"的图：取前 5 张随机挑一张。
+     * 以前永远返回第一名 → 图库 146 张，实际只有几张在轮换。
+     */
+    private pickDiverse;
     /** 按描述从 dsh-meme 图库找图；同一张最近发过就换一张同情绪的，避免来回重复。 */
     private resolveMeme;
     /** 记录用过的表情描述（注入给模型，提示别连着用同一个），最多 8 条。 */

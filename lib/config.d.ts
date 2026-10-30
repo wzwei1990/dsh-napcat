@@ -85,6 +85,8 @@ export interface Config {
     proactiveQuietHours: string;
     proactiveMinMessages: number;
     proactiveWindowMinutes: number;
+    /** 群里安静超过多少秒就不再主动开口（0=不限） */
+    proactiveFreshSeconds: number;
     memorySpacePrefix: string;
     memorySpaces: string;
     recentLimit: number;

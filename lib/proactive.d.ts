@@ -26,6 +26,8 @@ export interface ProactiveOptions {
     minMessages: number;
     /** 观察窗口（分钟） */
     windowMinutes: number;
+    /** 最后一条他人消息距今超过多少秒就不再开口（默认 120；0=不限） */
+    freshSeconds?: number;
 }
 export interface ChatProactiveState {
     /** 上次成功发言时间（ms） */
@@ -69,6 +71,8 @@ export declare function decide(input: {
     options: ProactiveOptions;
     state: ChatProactiveState;
     recentOthers: number;
+    /** 最后一条他人消息的时间（ms）：群里刚还在聊才考虑开口 */
+    lastMessageAt?: number;
     random?: () => number;
     quietRanges?: ReadonlyArray<[number, number]>;
 }): Decision;
