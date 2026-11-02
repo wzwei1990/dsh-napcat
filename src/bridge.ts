@@ -307,6 +307,8 @@ export class Bridge {
     lastMessageAt: 0,
     lastHeartbeatAt: 0,
     quietWarnedAt: 0,
+    /** 上次心跳时的计数快照：心跳展示两次心跳之间的增量 */
+    hbSnapshot: { group: 0, priv: 0, sent: 0, reply: 0, proactive: 0, eval: 0, proactiveSent: 0, skipped: 0 },
   }
   private readonly archiveAgents = new Map<string, { agent: Agent; dispose(): Promise<void> }>()
   private readonly archiveRunning = new Set<string>()
@@ -373,15 +375,39 @@ export class Bridge {
       const pad = (n: number): string => String(n).padStart(2, '0')
       return pad(d.getHours()) + ':' + pad(d.getMinutes())
     }
-    // 心跳只讲人话：谁说了多少、我发了多少、最后活跃时刻。
-    // 主动发言的评估细节（评估次数 / 最后原因 / skipStreak）留给每 30 分钟的汇总行，避免这里塞太多数字。
+    // 心跳展示"两次心跳之间"的增量（比从启动累计更有意义）。
+    const hb = this.stats.hbSnapshot
+    const dGroup = this.stats.groupMessages - hb.group
+    const dPriv = this.stats.privateMessages - hb.priv
+    const dSent = this.stats.sent - hb.sent
+    const dReply = this.stats.replyTurns - hb.reply
+    const dProactive = this.stats.proactiveTurns - hb.proactive
+    const dEval = this.stats.proactiveEvalCount - hb.eval
+    const dProactiveSent = this.stats.proactiveSent - hb.proactiveSent
+    this.stats.hbSnapshot = {
+      group: this.stats.groupMessages,
+      priv: this.stats.privateMessages,
+      sent: this.stats.sent,
+      reply: this.stats.replyTurns,
+      proactive: this.stats.proactiveTurns,
+      eval: this.stats.proactiveEvalCount,
+      proactiveSent: this.stats.proactiveSent,
+      skipped: this.stats.proactiveSkipped,
+    }
+    // 主动发言：开关 + 本期评估次数 + 真正说了几次（模型选择不说也算在触发里）
+    const proactiveNow = cfg.proactiveEnabled
+      ? '开 · 本期评估 ' + dEval + ' 次 · 成功 ' + dProactiveSent + ' 次'
+        + (dProactive > dProactiveSent ? '（另有 ' + (dProactive - dProactiveSent) + ' 次模型选择不说）' : '')
+        + (this.stats.proactiveEvalCount > 0
+          ? ' · 最近 ' + this.stats.proactiveLastReason + '（' + clockOf(this.stats.proactiveLastEvalAt) + '）'
+          : ' · 还没评估过')
+      : '关'
     this.opts.log('info', '[心跳] ' + (connected ? '在线' : 'NapCat 未连接')
-      + ' | 群消息 ' + this.stats.groupMessages + ' 条'
-      + (this.stats.privateMessages > 0 ? '（私聊 ' + this.stats.privateMessages + ' 条）' : '')
-      + ' | 我发了 ' + this.stats.sent + ' 条（回复 ' + this.stats.replyTurns + ' / 主动 ' + this.stats.proactiveTurns + '）'
+      + ' | 本期：群消息 ' + dGroup + ' 条' + (dPriv > 0 ? '（私聊 ' + dPriv + '）' : '')
+      + ' · 我发 ' + dSent + ' 条（回复 ' + dReply + ' / 主动 ' + dProactive + '）'
+      + ' | 主动发言 ' + proactiveNow
       + ' | 群最新 ' + clockOf(this.stats.lastMessageAt) + ' · 我最后 ' + clockOf(this.stats.lastSelfSpokeAt)
-      + ' | 会话 ' + this.chats.size + ' 个'
-      + ' | 主动发言 ' + (cfg.proactiveEnabled ? '开' : '关'))
+      + ' | 会话 ' + this.chats.size + ' 个')
     // 连着却长时间没消息：最常见的故障（NapCat 没把群消息上报过来）。
     // 三段门避免夜里/静默时段误报：
     //   ① 静默时段（proactiveQuietHours，默认 00:00-08:00）不告警
