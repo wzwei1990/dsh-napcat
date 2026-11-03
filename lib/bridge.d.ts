@@ -21,6 +21,8 @@ export declare class Bridge {
     private readonly opts;
     /** 群/私聊记忆（一群一目录 + mnemon 长期记忆）。 */
     private readonly mem;
+    /** 游戏 wiki 联动（查一次，按意图包装；失败静默） */
+    private readonly gameWiki;
     /** 已尝试预热的聊天（每会话一次）。 */
     /** 上次预热尝试时间（避免频繁重试）。 */
     private readonly warmAttempts;

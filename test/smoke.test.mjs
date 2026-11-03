@@ -868,3 +868,60 @@ test('客户端模块不得在顶层声明变量（会与其他插件的 classic
   assert.deepEqual(offenders, [], '顶层声明必须包进 IIFE，否则会报 Identifier already declared')
   assert.ok(code.includes('(() => {'), '客户端文件必须整体包在 IIFE 里')
 })
+test('游戏 wiki 联动：真问攻略 → ask；讨论道具 → discuss；无关 → 不触发', async () => {
+  const { detectGameIntent, extractKeyword, buildGameBlock } = await import('../lib/gamewiki.js')
+  const games = ['影之刃零', '影零']
+
+  const ask = detectGameIntent('影之刃零魔渊怎么打啊', games)
+  assert.equal(ask?.mode, 'ask')
+  assert.equal(ask?.game, '影之刃零')
+
+  const discuss = detectGameIntent('影零这武器感觉有点垃圾', games)
+  assert.equal(discuss?.mode, 'discuss')
+
+  assert.equal(detectGameIntent('今天吃什么', games), undefined)
+  assert.equal(detectGameIntent('影之刃零', games), undefined)
+
+  assert.ok(extractKeyword('魔渊怎么打').length > 0)
+  assert.ok(extractKeyword('这武器感觉有点垃圾').length <= 8)
+
+  const askBlock = buildGameBlock({ game: '影之刃零', title: '魔渊BOSS攻略', url: 'https://x', text: '正文', mode: 'ask' })
+  const discussBlock = buildGameBlock({ game: '影之刃零', title: '魔渊BOSS攻略', url: 'https://x', text: '正文', mode: 'discuss' })
+  assert.ok(askBlock.includes('先给结论'))
+  assert.ok(!askBlock.includes('https://'), 'ask 不该带链接')
+  assert.ok(!/来源\s*[:：]/.test(askBlock), 'ask 不该贴来源')
+  assert.ok(discussBlock.includes('不是要你复述的答案'))
+  assert.ok(!discussBlock.includes('先给结论'))
+  assert.ok(discussBlock.includes('不要贴来源'))
+})
+test('游戏 wiki：同一问题命中缓存，不再发第二次请求', async () => {
+  const { GameWiki } = await import('../lib/gamewiki.js')
+  let calls = 0
+  const svc = {
+    list: () => [{ name: '影之刃零', aliases: ['影零'] }],
+    search: async () => { calls += 1; return [{ title: '魔渊BOSS攻略', url: 'https://x' }] },
+    read: async () => ({ title: '魔渊BOSS攻略', text: '弹反可造成大硬直', url: 'https://x' }),
+  }
+  const ctx = { get: (name) => (name === 'dshGame' ? svc : undefined) }
+  const wiki = new GameWiki({ ctx, enabled: true, maxChars: 1200, cacheTtlMs: 300000, log: () => {} })
+  const first = await wiki.contextFor('g1', '影之刃零魔渊怎么打')
+  const second = await wiki.contextFor('g1', '影之刃零魔渊怎么打')
+  assert.ok(first !== undefined && second !== undefined)
+  assert.equal(calls, 1, '第二次应该命中缓存，不再请求 wiki')
+  assert.equal(first, second)
+})
+
+test('游戏 wiki：与游戏无关的话不触发查询', async () => {
+  const { GameWiki } = await import('../lib/gamewiki.js')
+  let calls = 0
+  const svc = {
+    list: () => [{ name: '影之刃零', aliases: [] }],
+    search: async () => { calls += 1; return [] },
+    read: async () => ({ title: '', text: '', url: '' }),
+  }
+  const ctx = { get: (name) => (name === 'dshGame' ? svc : undefined) }
+  const wiki = new GameWiki({ ctx, enabled: true, maxChars: 1200, cacheTtlMs: 300000, log: () => {} })
+  assert.equal(await wiki.contextFor('g1', '今天中午吃什么'), undefined)
+  assert.equal(await wiki.contextFor('g1', '有人在打游戏吗'), undefined)
+  assert.equal(calls, 0)
+})

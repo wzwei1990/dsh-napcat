@@ -29,6 +29,7 @@ import { buildRefusalPrompt, cleanRefusal, detectDanger, type DangerHit } from '
 import type { LogLevel, OneBotConnection } from './onebot.js'
 import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, stripKeyword, titleFrom, toText } from './text.js'
 import { MemoryStore } from './memory.js'
+import { GameWiki } from './gamewiki.js'
 import { ImageCache } from './imagecache.js'
 import { buildArchivePrompt, parseArchivePayload, type ArchivePayload } from './archive.js'
 import { faceFor } from './faces.js'
@@ -85,6 +86,8 @@ export interface BridgeOptions {
 export class Bridge {
   /** 群/私聊记忆（一群一目录 + mnemon 长期记忆）。 */
   private readonly mem: MemoryStore
+  /** 游戏 wiki 联动（查一次，按意图包装；失败静默） */
+  private readonly gameWiki: GameWiki
   /** 已尝试预热的聊天（每会话一次）。 */
   /** 上次预热尝试时间（避免频繁重试）。 */
   private readonly warmAttempts = new Map<string, number>()
@@ -101,6 +104,13 @@ export class Bridge {
   private mentionWarned = false
 
   constructor(private readonly opts: BridgeOptions) {
+    this.gameWiki = new GameWiki({
+      ctx: opts.ctx,
+      enabled: opts.config.gameWikiEnabled,
+      maxChars: 1200,
+      cacheTtlMs: 5 * 60_000,
+      log: opts.log,
+    })
     this.mem = new MemoryStore({
       ctx: opts.ctx,
       root: normalizePath(join(normalizePath(opts.config.workspacePath) || process.cwd(), 'memory')),

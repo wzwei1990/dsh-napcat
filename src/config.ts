@@ -73,6 +73,8 @@ export interface Config {
   model: string
   /** 日志级别。 */
   /** 运行心跳日志：每 N 分钟打一条状态（0=关闭） */
+  /** 群里聊到已收录游戏时查 wiki（真问攻略给答案，讨论只当背景） */
+  gameWikiEnabled: boolean
   heartbeatMinutes: number
   logLevel: 'debug' | 'info' | 'warn'
   memoryEnabled: boolean
@@ -174,6 +176,8 @@ export const Config: Z<Config> = z.object({
     .description('覆盖模型 provider；留空=宿主默认').volatile(),
   model: z.string().default('')
     .description('覆盖模型 id；留空=宿主默认').volatile(),
+  gameWikiEnabled: z.boolean().default(false)
+    .description('群里聊到已收录的游戏时，查一次 wiki：真问攻略就给答案，只是讨论就只当背景。默认关。').volatile(),
   heartbeatMinutes: z.natural().default(10).description('运行心跳：每 N 分钟打一条状态摘要（0=关闭）').volatile(),
   logLevel: z.union([z.const('debug'), z.const('info'), z.const('warn')]).default('info')
     .description('日志级别').volatile(),
@@ -243,6 +247,7 @@ export const DEFAULTS: Config = {
   agentPreset: '',
   provider: '',
   model: '',
+  gameWikiEnabled: false,
   heartbeatMinutes: 10,
   logLevel: 'info',
   memoryEnabled: true,

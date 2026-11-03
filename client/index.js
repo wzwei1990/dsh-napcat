@@ -101,6 +101,12 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'proactiveHotMessages', label: '话题门槛（观察窗口内至少多少条他人消息才考虑插话）', kind: 'number' },
         { key: 'proactiveFreshSeconds', label: '冷场门：群里安静超过多少秒就不再主动开口（0=不限）', kind: 'number' },
         { key: 'proactiveQuietHours', label: '主动发言静默时段（如 00:00-08:00,12:00-13:00）', kind: 'text' },
+        { section: '游戏攻略' },
+        {
+          key: 'gameWikiEnabled',
+          label: '群里聊到游戏时查 wiki（真问攻略给答案；只是讨论就只当背景参考，不给攻略）',
+          kind: 'boolean',
+        },
         { section: '运行与日志' },
         { key: 'heartbeatMinutes', label: '运行心跳：每 N 分钟打一条状态摘要（默认 10，0=关闭）', kind: 'number' },
         { key: 'logLevel', label: '日志级别', kind: 'select', options: [['info', 'info'], ['debug', 'debug'], ['warn', 'warn']] },

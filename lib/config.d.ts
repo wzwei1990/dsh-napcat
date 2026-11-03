@@ -70,6 +70,8 @@ export interface Config {
     model: string;
     /** 日志级别。 */
     /** 运行心跳日志：每 N 分钟打一条状态（0=关闭） */
+    /** 群里聊到已收录游戏时查 wiki（真问攻略给答案，讨论只当背景） */
+    gameWikiEnabled: boolean;
     heartbeatMinutes: number;
     logLevel: 'debug' | 'info' | 'warn';
     memoryEnabled: boolean;
