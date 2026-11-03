@@ -858,3 +858,13 @@ test('归档解析：人物不设上限时不该被截成 8 个', async () => {
   const capped = parseArchivePayload(json, 5)
   assert.equal(capped.people.length, 5)
 })
+test('客户端模块不得在顶层声明变量（会与其他插件的 classic script 撞名，拖垮整个 web boot）', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const code = readFileSync(join(import.meta.dirname, '..', 'client', 'index.js'), 'utf8')
+  const offenders = code
+    .split('\n')
+    .filter(line => /^(const|let|var|function|class)\s/.test(line))
+  assert.deepEqual(offenders, [], '顶层声明必须包进 IIFE，否则会报 Identifier already declared')
+  assert.ok(code.includes('(() => {'), '客户端文件必须整体包在 IIFE 里')
+})

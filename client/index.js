@@ -17,7 +17,8 @@
  * 顶部 window 守卫：本文件是浏览器专属；万一被 Node 侧扫描/import 时安静退出，绝不拖累宿主启动。
  */
 
-const moduleLoader = typeof window === 'undefined' ? undefined : window.__ModuleLoader__
+;(() => {
+  const moduleLoader = typeof window === 'undefined' ? undefined : window.__ModuleLoader__
 
 if (moduleLoader !== undefined && moduleLoader !== null) {
   moduleLoader.load({
@@ -358,3 +359,4 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
     },
   })
 }
+})()
