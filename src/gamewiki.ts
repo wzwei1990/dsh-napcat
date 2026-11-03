@@ -69,10 +69,18 @@ export function detectGameIntent(text: string, games: readonly string[]): GameQu
   }
 }
 
-/** 抽关键词：剥掉停用词后取最长一段中文/字母数字串（≤8 字），抽不到就用原文 */
+/** 放进关键词的噪声词（提问/评价/泛用动词）：整块剥掉，避免把"怎么打"当搜索词 */
+const NOISE_WORDS = /怎么打|打法|攻略|弱点|材料|配装|掉落|怎么过|在哪|哪里|如何|怎么|解锁|顺序|推荐等级|几级|抗性|机制|怎么获取|感觉|我觉得|是不是|好用|垃圾|值不值|值得|厉害|无语|有点|挺|真的|这个|那个|一下|有没有|可以|能用/g
+
+/** 抽关键词：剥掉停用词/噪声词后取最长一段中文/字母数字串（≤8 字） */
 export function extractKeyword(rest: string): string {
-  const cleaned = rest.replace(STOP_WORDS, ' ')
-  const runs = cleaned.match(/[\u4e00-\u9fa5a-zA-Z0-9]{2,}/g) ?? []
+  const cleaned = rest
+    .replace(NOISE_WORDS, ' ')
+    .replace(ASK_WORDS, ' ')
+    .replace(DISCUSS_WORDS, ' ')
+    .replace(STOP_WORDS, ' ')
+  const runs = (cleaned.match(/[\u4e00-\u9fa5a-zA-Z0-9]{2,}/g) ?? [])
+    .filter(run => !/^[的了是吗呢啊吧呀嘛哦哈]+$/.test(run))
   const best = runs.sort((a, b) => b.length - a.length)[0] ?? ''
   return best.slice(0, 8)
 }
@@ -168,8 +176,11 @@ export class GameWiki {
       const page = svc.read === undefined
         ? { title: first.title, text: first.snippet ?? '', url: first.url }
         : await svc.read(gameName, first.title, { maxChars: this.options.maxChars })
-      const body = (page.text ?? '').trim()
-      if (body === '') return undefined
+      const body = cleanBody(page.text ?? '')
+      if (body === '') {
+        this.options.log('debug', '游戏资料太薄（占位/待补充），跳过注入')
+        return undefined
+      }
       this.options.log('info', '游戏资料命中：' + gameName + ' / ' + first.title + '（' + query.mode + '）')
       const block = buildGameBlock({
         game: gameName,
@@ -221,4 +232,18 @@ export function buildGameBlock(input: GameBlockInput): string {
     ? '[用法] 有人真的在问攻略：用你自己理解后的口语说出来（先给结论，再补一两句），像老玩家随口讲；不要贴来源/链接、不要整段搬运、不要列成长清单；不确定就说不知道。'
     : '[用法] 这是让你听懂大家在聊什么，用来支撑你自己的看法：不要列点、不要给攻略步骤、不要说"wiki 上写着"、不要贴来源；最多自然地带一条事实。'
   return head + body + tail
+}
+/** 正文清洗：去掉表格残渣/占位页；太薄的直接判空（宁可不说，也别把"待补充"塞给模型） */
+export function cleanBody(text: string): string {
+  const lines = text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => !/^[-—–\s]*$/.test(line))
+    .filter(line => !/^(占位|待补充|暂无|没有内容)[。！!]?$/.test(line))
+  const body = lines.join('\n').trim()
+  if (body.length < 40) return ''
+  // 几乎全是"待补充"的页面
+  const stubHits = (body.match(/待补充|占位|暂无/g) ?? []).length
+  if (stubHits >= 3 && stubHits * 6 > body.split('\n').length) return ''
+  return body
 }

@@ -900,7 +900,7 @@ test('游戏 wiki：同一问题命中缓存，不再发第二次请求', async 
   const svc = {
     list: () => [{ name: '影之刃零', aliases: ['影零'] }],
     search: async () => { calls += 1; return [{ title: '魔渊BOSS攻略', url: 'https://x' }] },
-    read: async () => ({ title: '魔渊BOSS攻略', text: '弹反可造成大硬直', url: 'https://x' }),
+    read: async () => ({ title: '魔渊BOSS攻略', text: '魔渊是影之刃零中的高难度副本区域，环境险恶，BOSS实力强劲。玩家需要掌握弹反、闪避等进阶技巧才能顺利通关。', url: 'https://x' }),
   }
   const ctx = { get: (name) => (name === 'dshGame' ? svc : undefined) }
   const wiki = new GameWiki({ ctx, enabled: true, maxChars: 1200, cacheTtlMs: 300000, log: () => {} })
@@ -924,4 +924,12 @@ test('游戏 wiki：与游戏无关的话不触发查询', async () => {
   assert.equal(await wiki.contextFor('g1', '今天中午吃什么'), undefined)
   assert.equal(await wiki.contextFor('g1', '有人在打游戏吗'), undefined)
   assert.equal(calls, 0)
+})
+test('占位页/太薄的正文不注入（宁可不说）', async () => {
+  const { cleanBody } = await import('../lib/gamewiki.js')
+  assert.equal(cleanBody('占位'), '')
+  assert.equal(cleanBody('待补充'), '')
+  assert.equal(cleanBody('- -\n-\n人类高手\n待补充'), '')
+  const real = cleanBody('暗魔天堡之主：魔渊\n战斗定位 终极头目\n所属地图 悲泣溪谷\n核心抗性 火焰100% 寒冰100%')
+  assert.ok(real.includes('终极头目'))
 })

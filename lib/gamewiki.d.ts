@@ -43,7 +43,7 @@ export declare function normalizeText(text: string): string;
  * @param games 已收录的游戏名/别名（来自 dsh-game 的 list()）
  */
 export declare function detectGameIntent(text: string, games: readonly string[]): GameQuery | undefined;
-/** 抽关键词：剥掉停用词后取最长一段中文/字母数字串（≤8 字），抽不到就用原文 */
+/** 抽关键词：剥掉停用词/噪声词后取最长一段中文/字母数字串（≤8 字） */
 export declare function extractKeyword(rest: string): string;
 export interface GameWikiOptions {
     ctx: Context;
@@ -84,3 +84,5 @@ export interface GameBlockInput {
 }
 /** 两种注入形态：同一份数据，两套指令（ask 给答案 / discuss 只当背景） */
 export declare function buildGameBlock(input: GameBlockInput): string;
+/** 正文清洗：去掉表格残渣/占位页；太薄的直接判空（宁可不说，也别把"待补充"塞给模型） */
+export declare function cleanBody(text: string): string;
