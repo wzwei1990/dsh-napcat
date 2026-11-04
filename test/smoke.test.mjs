@@ -868,68 +868,40 @@ test('客户端模块不得在顶层声明变量（会与其他插件的 classic
   assert.deepEqual(offenders, [], '顶层声明必须包进 IIFE，否则会报 Identifier already declared')
   assert.ok(code.includes('(() => {'), '客户端文件必须整体包在 IIFE 里')
 })
-test('游戏 wiki 联动：真问攻略 → ask；讨论道具 → discuss；无关 → 不触发', async () => {
-  const { detectGameIntent, extractKeyword, buildGameBlock } = await import('../lib/gamewiki.js')
-  const games = ['影之刃零', '影零']
 
-  const ask = detectGameIntent('影之刃零魔渊怎么打啊', games)
-  assert.equal(ask?.mode, 'ask')
-  assert.equal(ask?.game, '影之刃零')
-
-  const discuss = detectGameIntent('影零这武器感觉有点垃圾', games)
-  assert.equal(discuss?.mode, 'discuss')
-
-  assert.equal(detectGameIntent('今天吃什么', games), undefined)
-  assert.equal(detectGameIntent('影之刃零', games), undefined)
-
-  assert.ok(extractKeyword('魔渊怎么打').length > 0)
-  assert.ok(extractKeyword('这武器感觉有点垃圾').length <= 8)
-
-  const askBlock = buildGameBlock({ game: '影之刃零', title: '魔渊BOSS攻略', url: 'https://x', text: '正文', mode: 'ask' })
-  const discussBlock = buildGameBlock({ game: '影之刃零', title: '魔渊BOSS攻略', url: 'https://x', text: '正文', mode: 'discuss' })
-  assert.ok(askBlock.includes('先给结论'))
-  assert.ok(!askBlock.includes('https://'), 'ask 不该带链接')
-  assert.ok(!/来源\s*[:：]/.test(askBlock), 'ask 不该贴来源')
-  assert.ok(discussBlock.includes('不是要你复述的答案'))
-  assert.ok(!discussBlock.includes('先给结论'))
-  assert.ok(discussBlock.includes('不要贴来源'))
-})
-test('游戏 wiki：同一问题命中缓存，不再发第二次请求', async () => {
-  const { GameWiki } = await import('../lib/gamewiki.js')
-  let calls = 0
+test('游戏词表召回：命中就给出线索与工具用法，不替模型下结论', async () => {
+  const { GameWiki, buildHintBlock } = await import('../lib/gamewiki.js')
   const svc = {
-    list: () => [{ name: '影之刃零', aliases: ['影零'] }],
-    search: async () => { calls += 1; return [{ title: '魔渊BOSS攻略', url: 'https://x' }] },
-    read: async () => ({ title: '魔渊BOSS攻略', text: '魔渊是影之刃零中的高难度副本区域，环境险恶，BOSS实力强劲。玩家需要掌握弹反、闪避等进阶技巧才能顺利通关。', url: 'https://x' }),
+    list: () => [{ name: '影之刃零' }],
+    detect: async (text) => (text.includes('庞镇') ? [{ game: '影之刃零', hits: ['庞镇', '雪山'] }] : []),
   }
   const ctx = { get: (name) => (name === 'dshGame' ? svc : undefined) }
-  const wiki = new GameWiki({ ctx, enabled: true, maxChars: 1200, cacheTtlMs: 300000, log: () => {} })
-  const first = await wiki.contextFor('g1', '影之刃零魔渊怎么打')
-  const second = await wiki.contextFor('g1', '影之刃零魔渊怎么打')
-  assert.ok(first !== undefined && second !== undefined)
-  assert.equal(calls, 1, '第二次应该命中缓存，不再请求 wiki')
-  assert.equal(first, second)
+  const wiki = new GameWiki({ ctx, enabled: true, log: () => {} })
+  const block = await wiki.hintFor('那我应该可以直接去庞镇了吧')
+  assert.ok(block !== undefined)
+  assert.ok(block.includes('影之刃零'))
+  assert.ok(block.includes('庞镇'))
+  assert.ok(block.includes('game_wiki_search'))
+  assert.ok(block.includes('只是随口讨论/评价'))
+  // 没有命中就不注入
+  const none = await wiki.hintFor('今天吃什么')
+  assert.equal(none, undefined)
 })
 
-test('游戏 wiki：与游戏无关的话不触发查询', async () => {
+test('游戏词表召回：未启用 / 服务缺失 / 空消息 都不注入', async () => {
   const { GameWiki } = await import('../lib/gamewiki.js')
-  let calls = 0
-  const svc = {
-    list: () => [{ name: '影之刃零', aliases: [] }],
-    search: async () => { calls += 1; return [] },
-    read: async () => ({ title: '', text: '', url: '' }),
-  }
-  const ctx = { get: (name) => (name === 'dshGame' ? svc : undefined) }
-  const wiki = new GameWiki({ ctx, enabled: true, maxChars: 1200, cacheTtlMs: 300000, log: () => {} })
-  assert.equal(await wiki.contextFor('g1', '今天中午吃什么'), undefined)
-  assert.equal(await wiki.contextFor('g1', '有人在打游戏吗'), undefined)
-  assert.equal(calls, 0)
+  const svc = { list: () => [], detect: async () => [{ game: 'X', hits: ['Y'] }] }
+  const on = new GameWiki({ ctx: { get: () => svc }, enabled: true, log: () => {} })
+  const off = new GameWiki({ ctx: { get: () => svc }, enabled: false, log: () => {} })
+  const missing = new GameWiki({ ctx: { get: () => undefined }, enabled: true, log: () => {} })
+  assert.equal(await off.hintFor('庞镇在哪'), undefined)
+  assert.equal(await missing.hintFor('庞镇在哪'), undefined)
+  assert.equal(await on.hintFor('   '), undefined)
 })
-test('占位页/太薄的正文不注入（宁可不说）', async () => {
-  const { cleanBody } = await import('../lib/gamewiki.js')
-  assert.equal(cleanBody('占位'), '')
-  assert.equal(cleanBody('待补充'), '')
-  assert.equal(cleanBody('- -\n-\n人类高手\n待补充'), '')
-  const real = cleanBody('暗魔天堡之主：魔渊\n战斗定位 终极头目\n所属地图 悲泣溪谷\n核心抗性 火焰100% 寒冰100%')
-  assert.ok(real.includes('终极头目'))
+
+test('归档规则：event 里的游戏进度必须带游戏名', async () => {
+  const { buildArchivePrompt } = await import('../lib/archive.js')
+  const prompt = buildArchivePrompt({ path: 'x', count: 10, chatKey: 'group:1' })
+  assert.ok(prompt.includes('群友的游戏进度'))
+  assert.ok(prompt.includes('游戏名'))
 })

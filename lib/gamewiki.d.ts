@@ -1,88 +1,48 @@
 /**
- * 游戏 wiki 联动：判意图 → 查一次 → 按意图包装成注入块。
+ * 游戏 wiki 联动（模型自决版）。
  *
- * 两种情况必须分开（用户明确要求）：
- *   ask     —— 真的在问攻略（"魔渊怎么打""弹反在哪学"）：查完给答案
- *   discuss —— 在聊某个道具/机制（"这武器感觉挺强""黑伤值不值"）：查到的只当**背景**，
- *              用来听懂大家在聊什么，不许复述、不给攻略、不贴来源
+ * 设计（2026-11-04 与用户确认）：
+ *   ① 词表召回（零成本、代码）：dsh-game 用 wiki 全站标题建词表，识别群聊里的地名/道具名；
+ *   ② 把命中结果 + 可用工具写进注入，交给**模型自己判断**：
+ *        真在问攻略 → 调 game_wiki_search / game_wiki_read，用自己的话答（不贴来源）
+ *        只是讨论     → 可以不查；查了也只当背景，不列点、不给教程、不说"wiki 上写着"
+ *   ③ 插件不做阈值判定、不做预算限流：工具自身已有缓存与 6s 串行。
  *
- * 所有失败都静默（限流 / 没收录 / 服务不在），绝不把错误甩到群里。
+ * 所有失败静默（没装 dsh-game / 词表没建 / 出错），绝不把错误甩到群里。
  */
 import type { Context } from '@deepseek-ai/cordis';
-export interface GameQuery {
-    game: string;
-    keyword: string;
-    mode: 'ask' | 'discuss';
-}
-/** dsh-game 暴露的服务形状（本插件只依赖这一小部分） */
+/** dsh-game 暴露的服务（只依赖这一小部分） */
 export interface GameService {
     list?: () => Array<{
         name: string;
         aliases?: string[];
     }>;
-    resolve?: (name: string) => unknown;
-    search?: (game: string, keyword: string) => Promise<Array<{
-        title: string;
-        snippet?: string;
-        url?: string;
+    /** 词表召回：返回命中的游戏与命中词（只召回，不判断） */
+    detect?: (text: string) => Promise<Array<{
+        game: string;
+        hits: string[];
+        pages?: string[];
     }>>;
-    read?: (game: string, title: string, optionsOrMax?: number | {
-        maxChars?: number;
-        section?: number;
-    }) => Promise<{
-        title: string;
-        text: string;
-        url?: string;
-    }>;
 }
-/** 去掉标点，保留中英文数字 */
-export declare function normalizeText(text: string): string;
-/**
- * 从一条群消息里判断"要不要查、查什么、怎么用"。
- * @param text 消息文本
- * @param games 已收录的游戏名/别名（来自 dsh-game 的 list()）
- */
-export declare function detectGameIntent(text: string, games: readonly string[]): GameQuery | undefined;
-/** 抽关键词：剥掉停用词/噪声词后取最长一段中文/字母数字串（≤8 字） */
-export declare function extractKeyword(rest: string): string;
-export interface GameWikiOptions {
+export interface GameHintOptions {
     ctx: Context;
     enabled: boolean;
-    /** 注入块最大字数（只为省上下文，不是限流） */
-    maxChars: number;
-    /** 同一问题的结果缓存时长：重复问同一件事直接复用文本，不再发请求 */
-    cacheTtlMs: number;
     log: (level: 'debug' | 'info' | 'warn', message: string) => void;
 }
 export declare class GameWiki {
     private readonly options;
-    /** 游戏名+关键词 → 已生成的注入块（TTL 内复用，避免重复请求；不是拒绝查询） */
-    private readonly cache;
-    /** 缓存游戏名列表（避免每条消息都问服务） */
-    private cachedNames;
-    constructor(options: GameWikiOptions);
-    /** dsh-game 服务；没装/未启用就是 undefined（联动整体静默关闭） */
+    constructor(options: GameHintOptions);
     private service;
-    private gameNames;
-    /** 命中缓存就直接复用（同一问题不重复发请求，但照样能回答） */
-    private cacheGet;
-    private cacheSet;
     /**
-     * 主入口：解析这条消息要不要游戏资料。
-     * 返回注入块文本；不需要 / 失败 / 超预算 一律 undefined（调用方原样继续）。
+     * 返回要注入的"话题线索"块；没有命中 / 未启用 / 服务不在 → undefined。
+     * 注意：这里**不查 wiki**，只告诉模型"可能是这个游戏、这些词、可以这样查"。
      */
-    contextFor(chatKey: string, text: string): Promise<string | undefined>;
-    /** 别名 → 标准名（注册表里的 name） */
-    private displayNameFor;
+    hintFor(text: string): Promise<string | undefined>;
 }
-export interface GameBlockInput {
+export interface Candidate {
     game: string;
-    title: string;
-    url: string;
-    text: string;
-    mode: 'ask' | 'discuss';
+    hits: string[];
+    pages?: string[];
 }
-/** 两种注入形态：同一份数据，两套指令（ask 给答案 / discuss 只当背景） */
-export declare function buildGameBlock(input: GameBlockInput): string;
-/** 正文清洗：去掉表格残渣/占位页；太薄的直接判空（宁可不说，也别把"待补充"塞给模型） */
-export declare function cleanBody(text: string): string;
+/** 注入块：线索 + 工具用法 + 两种意图的不同要求 */
+export declare function buildHintBlock(candidates: readonly Candidate[]): string;
