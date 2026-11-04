@@ -76,6 +76,12 @@ export interface Config {
   /** 群里聊到已收录游戏时查 wiki（真问攻略给答案，讨论只当背景） */
   gameWikiEnabled: boolean
   /** 投递后多久没等到 turn/start 就认为会话失效（秒）；连续等两轮才重置 */
+  /** 群里出现 B 站链接时，解析弹幕/字幕并注入「看过」上下文 */
+  biliEnabled: boolean
+  /** 有字幕时附带多少字（0 = 不取字幕） */
+  biliSubtitleChars: number
+  /** B 站链接是否也抽分镜（画面兜底，需 ffmpeg） */
+  biliStoryboard: boolean
   sessionStartTimeoutSeconds: number
   heartbeatMinutes: number
   logLevel: 'debug' | 'info' | 'warn'
@@ -180,6 +186,12 @@ export const Config: Z<Config> = z.object({
     .description('覆盖模型 id；留空=宿主默认').volatile(),
   gameWikiEnabled: z.boolean().default(false)
     .description('群里聊到已收录的游戏时，查一次 wiki：真问攻略就给答案，只是讨论就只当背景。默认关。').volatile(),
+  biliEnabled: z.boolean().default(true)
+    .description('群里出现 B 站链接时，解析视频（弹幕/字幕）后注入上下文，让机器人能接话').volatile(),
+  biliSubtitleChars: z.natural().default(400)
+    .description('有字幕时附带多少字（0=不取字幕）').volatile(),
+  biliStoryboard: z.boolean().default(true)
+    .description('B 站链接也抽分镜图（需要 dsh-bili + ffmpeg）').volatile(),
   sessionStartTimeoutSeconds: z.natural().default(20)
     .description('投递后多久没等到会话开始（秒）。慢模型/云端可调大；会等两轮才重置会话').volatile(),
   heartbeatMinutes: z.natural().default(10).description('运行心跳：每 N 分钟打一条状态摘要（0=关闭）').volatile(),
@@ -252,6 +264,9 @@ export const DEFAULTS: Config = {
   provider: '',
   model: '',
   gameWikiEnabled: false,
+  biliEnabled: true,
+  biliSubtitleChars: 400,
+  biliStoryboard: true,
   sessionStartTimeoutSeconds: 20,
   heartbeatMinutes: 10,
   logLevel: 'info',

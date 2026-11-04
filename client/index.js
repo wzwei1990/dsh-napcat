@@ -107,6 +107,22 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
             label: '会话启动超时（秒，连续两轮没动静才重置会话）',
             kind: 'number',
           },
+          { section: '视频与链接' },
+          {
+            key: 'biliEnabled',
+            label: '群里出现 B 站链接时，解析弹幕/字幕，让机器人"看过"再聊（默认开）',
+            kind: 'boolean',
+          },
+          {
+            key: 'biliSubtitleChars',
+            label: '有字幕时附带多少字（0=不取字幕）',
+            kind: 'number',
+          },
+          {
+            key: 'biliStoryboard',
+            label: '同时抽分镜图（画面兜底，需要 dsh-bili + ffmpeg）',
+            kind: 'boolean',
+          },
           { section: '游戏攻略' },
         {
           key: 'gameWikiEnabled',

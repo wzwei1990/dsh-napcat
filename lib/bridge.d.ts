@@ -23,6 +23,8 @@ export declare class Bridge {
     private readonly mem;
     /** 游戏 wiki 联动（查一次，按意图包装；失败静默） */
     private readonly gameWiki;
+    /** B 站链接 → 「看过」上下文（弹幕高光 + 字幕节选） */
+    private readonly biliLink;
     /** 已尝试预热的聊天（每会话一次）。 */
     /** 上次预热尝试时间（避免频繁重试）。 */
     private readonly warmAttempts;

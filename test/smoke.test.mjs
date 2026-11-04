@@ -905,3 +905,26 @@ test('归档规则：event 里的游戏进度必须带游戏名', async () => {
   assert.ok(prompt.includes('群友的游戏进度'))
   assert.ok(prompt.includes('游戏名'))
 })
+test('B 站链接抽取：完整 URL / b23 短链 / BV 号 / av 号', async () => {
+  const { extractBiliLink } = await import('../lib/bililink.js')
+  assert.equal(extractBiliLink('看这个 https://www.bilibili.com/video/BV1GJ411x7h7?p=1 笑死'), 'https://www.bilibili.com/video/BV1GJ411x7h7?p=1')
+  assert.equal(extractBiliLink('https://b23.tv/abc123'), 'https://b23.tv/abc123')
+  assert.equal(extractBiliLink('BV1GJ411x7h7 这个'), 'https://www.bilibili.com/video/BV1GJ411x7h7')
+  assert.equal(extractBiliLink('av12345'), 'https://www.bilibili.com/video/av12345')
+  assert.equal(extractBiliLink('今天吃什么'), undefined)
+})
+
+test('B 站注入块：像看过一样聊天，不播报不贴链接', async () => {
+  const { buildBiliBlock } = await import('../lib/bililink.js')
+  const block = buildBiliBlock({
+    info: { title: '测试视频', up: '某UP', durationSec: 213, pageUrl: 'https://x', stats: { view: 12000000 } },
+    summary: { total: 1200, density: 5.63, peaks: [{ startSec: 0, endSec: 30, count: 737, samples: ['你被骗了'] }], samples: ['你被骗了', '欢迎回来'] },
+    subtitleText: '字幕节选内容',
+  })
+  assert.ok(block.includes('你刚看过'))
+  assert.ok(block.includes('1200'))
+  assert.ok(block.includes('你被骗了'))
+  assert.ok(block.includes('像真的看过一样随口接话'))
+  assert.ok(block.includes('不要贴链接'))
+  assert.ok(!block.includes('根据弹幕'))
+})

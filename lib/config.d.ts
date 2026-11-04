@@ -73,6 +73,12 @@ export interface Config {
     /** 群里聊到已收录游戏时查 wiki（真问攻略给答案，讨论只当背景） */
     gameWikiEnabled: boolean;
     /** 投递后多久没等到 turn/start 就认为会话失效（秒）；连续等两轮才重置 */
+    /** 群里出现 B 站链接时，解析弹幕/字幕并注入「看过」上下文 */
+    biliEnabled: boolean;
+    /** 有字幕时附带多少字（0 = 不取字幕） */
+    biliSubtitleChars: number;
+    /** B 站链接是否也抽分镜（画面兜底，需 ffmpeg） */
+    biliStoryboard: boolean;
     sessionStartTimeoutSeconds: number;
     heartbeatMinutes: number;
     logLevel: 'debug' | 'info' | 'warn';

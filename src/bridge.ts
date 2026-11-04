@@ -30,6 +30,7 @@ import type { LogLevel, OneBotConnection } from './onebot.js'
 import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, stripKeyword, titleFrom, toText } from './text.js'
 import { MemoryStore } from './memory.js'
 import { GameWiki } from './gamewiki.js'
+import { BiliLink } from './bililink.js'
 import { ImageCache } from './imagecache.js'
 import { buildArchivePrompt, parseArchivePayload, type ArchivePayload } from './archive.js'
 import { faceFor } from './faces.js'
@@ -87,6 +88,8 @@ export class Bridge {
   private readonly mem: MemoryStore
   /** 游戏 wiki 联动（查一次，按意图包装；失败静默） */
   private readonly gameWiki: GameWiki
+  /** B 站链接 → 「看过」上下文（弹幕高光 + 字幕节选） */
+  private readonly biliLink: BiliLink
   /** 已尝试预热的聊天（每会话一次）。 */
   /** 上次预热尝试时间（避免频繁重试）。 */
   private readonly warmAttempts = new Map<string, number>()
@@ -106,6 +109,13 @@ export class Bridge {
     this.gameWiki = new GameWiki({
       ctx: opts.ctx,
       enabled: opts.config.gameWikiEnabled,
+      log: opts.log,
+    })
+    this.biliLink = new BiliLink({
+      ctx: opts.ctx,
+      enabled: opts.config.biliEnabled,
+      subtitleChars: opts.config.biliSubtitleChars,
+      storyboard: opts.config.biliStoryboard,
       log: opts.log,
     })
     this.mem = new MemoryStore({
@@ -626,8 +636,10 @@ export class Bridge {
         : '【当前话题就是这张图：已经随本轮消息附上，直接对着图里的内容说，别接更早的文字话题】\n'
       // 词表召回：命中就把"可能是哪个游戏 + 可查工具"交给模型，由它决定查不查
       const gameHint = await this.gameWiki.hintFor(recent.slice(-3).join('\n'))
+      const biliHint = await this.biliLink.blockFor(recent.slice(-3).join('\n'))
       await this.dispatch(chat,
-        (gameHint === undefined ? '' : gameHint + '\n\n')
+        (biliHint === undefined ? '' : biliHint + '\n\n')
+        + (gameHint === undefined ? '' : gameHint + '\n\n')
         + (memoryBlock === '' ? '' : memoryBlock + '\n\n')
         + this.linkHintOf(recent)
         + imageNote
@@ -1363,7 +1375,9 @@ export class Bridge {
     const linkHint = this.linkHintOf([...(await this.mem.readRecent(ref.key, 4)), rawText])
     // 词表召回：命中就把"可能是哪个游戏 + 可查工具"交给模型，由它决定查不查
     const gameHint = await this.gameWiki.hintFor(textWithoutImageMarkers)
-    const text = [gameHint ?? '', memoryBlock, visualHint, linkHint, textWithoutImageMarkers, ...media.notes].filter(part => part !== '').join('\n\n')
+    // B 站链接：解析弹幕/字幕，让模型"看过"再接话
+    const biliHint = await this.biliLink.blockFor(textWithoutImageMarkers)
+    const text = [biliHint ?? '', gameHint ?? '', memoryBlock, visualHint, linkHint, textWithoutImageMarkers, ...media.notes].filter(part => part !== '').join('\n\n')
     if (text.trim() === '') {
       this.opts.log('debug', '空消息（无文本也没有可下载的媒体），跳过: ' + ref.key)
       return
@@ -1450,14 +1464,14 @@ export class Bridge {
 
   /** 把消息里的图片/文件下载到会话收件箱，返回给模型的文本注释（[图片: path]）。 */
   private async resolveInboundMedia(msg: ObMessageEvent, chat: ChatState): Promise<{ notes: string[]; blocks: ContentBlock[]; parts: Array<Record<string, unknown>> }> {
-    const media = segmentsOf(msg.message).filter(seg => seg.type === 'image' || seg.type === 'file')
+    const media = segmentsOf(msg.message).filter(seg => seg.type === 'image' || seg.type === 'file' || seg.type === 'video')
     // 引用回复：被引用的那条消息里的图/文件不在当前 segments 里，用 get_msg 取回来
     const replySeg = segmentsOf(msg.message).find(seg => seg.type === 'reply')
     const replyId = replySeg === undefined ? '' : String((replySeg.data as { id?: unknown } | undefined)?.id ?? '')
     if (replyId !== '') {
       try {
         const quoted = await this.opts.conn.call<{ message?: unknown }>('get_msg', { message_id: replyId })
-        const quotedMedia = segmentsOf(quoted?.message as never).filter(seg => seg.type === 'image' || seg.type === 'file')
+        const quotedMedia = segmentsOf(quoted?.message as never).filter(seg => seg.type === 'image' || seg.type === 'file' || seg.type === 'video')
         if (quotedMedia.length > 0) {
           media.push(...quotedMedia)
           this.debugLog(undefined, '引用消息带媒体 n=' + quotedMedia.length)
@@ -1495,6 +1509,42 @@ export class Bridge {
           // 路径注释永远保留：无视觉模型只会拿到宿主的占位文本，路径是它们唯一的抓手；
           // 视觉模型另外还能直接拿到 image block。
           notes.push('[图片: ' + saved.path + ']' + (attached ? '' : '（未登记为附件，仅路径）'))
+        } else if (seg.type === 'video') {
+          const isHttp = (v: unknown): v is string => typeof v === 'string' && /^https?:\/\//i.test(v)
+          const fileName = nameFromRef(fileRef, 'video.mp4')
+          let savedPath: string | undefined
+          const info = await this.opts.conn.call<{ base64?: string; url?: string; file?: string }>('get_file', { file: fileRef })
+          if (isHttp(info?.url)) {
+            const saved = await downloadToFile(info.url, inbox, fileName, DEFAULT_MAX_FILE_BYTES)
+            savedPath = saved.path
+          } else if (typeof info?.base64 === 'string' && info.base64 !== '') {
+            const buffer = base64UrlToBuffer(info.base64)
+            if (buffer.byteLength > DEFAULT_MAX_FILE_BYTES) throw new Error('视频超过上限')
+            savedPath = join(inbox, Date.now().toString(36) + '-' + fileName)
+            await writeFile(savedPath, buffer)
+          } else if (typeof info?.url === 'string' && info.url !== '') {
+            throw new Error('NapCat 只给了它本机的路径（' + info.url + '），跨机器取不到')
+          }
+          if (savedPath === undefined) throw new Error('get_file 没有可下载的视频地址')
+          this.opts.log('info', '收到视频 → ' + savedPath)
+          const bili = this.opts.ctx.get?.('dshBili') as { storyboard?: (input: string) => Promise<{ imagePath: string; timeline: Array<{ index: number; label: string }> }> } | undefined
+          const storyboard = bili?.storyboard
+          if (storyboard !== undefined) {
+            try {
+              const shot = await storyboard(savedPath)
+              const admitted = await this.admitImage(cwd, shot.imagePath, 'storyboard.png')
+              for (const block of admitted.blocks) blocks.push(block)
+              if (admitted.part !== undefined) parts.push(admitted.part)
+              const labels = shot.timeline.map(item => '#' + String(item.index) + ' ' + item.label).join('  ')
+              notes.push('[视频: ' + savedPath + ']')
+              notes.push('[图片: ' + shot.imagePath + ']（视频分镜，时间轴：' + labels + '）')
+            } catch (error) {
+              this.debugLog(cwd, '视频抽帧失败: ' + describe(error))
+              notes.push('[视频: ' + savedPath + ']（抽帧失败：' + describe(error) + '）')
+            }
+          } else {
+            notes.push('[视频: ' + savedPath + ']（没有 dsh-bili，未抽帧）')
+          }
         } else {
           // NapCat 在远端（常见于 Docker）：get_file 的 url 可能是它**本机路径**，不能 fetch。
           // 顺序照 dsh-onebot：①私聊 get_private_file_url 的 CDN 链接 ②get_file 的 base64 ③http url
@@ -1543,7 +1593,7 @@ export class Bridge {
       } catch (error) {
         const reason = describe(error)
         this.opts.log('warn', '收媒体失败（' + seg.type + '）: ' + reason)
-        notes.push('[' + (seg.type === 'image' ? '图片' : '文件') + ': 下载失败（' + reason + '）]')
+        notes.push('[' + (seg.type === 'image' ? '图片' : seg.type === 'video' ? '视频' : '文件') + ': 下载失败（' + reason + '）]')
       }
     }
     return { notes, blocks, parts }
