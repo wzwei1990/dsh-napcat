@@ -198,8 +198,13 @@ export declare class Bridge {
     /** 会话工作目录：开了 perChatWorkspace 时每个 QQ 会话一个子目录（侧边栏按工作区归拢）。 */
     private cwdFor;
     private dispatch;
-    /** 10s 内没等到 turn/start 就认为会话已失效（典型：会话被归档），换新会话重投一次。 */
+    /**
+     * 投递后等 turn/start。**两轮**才判定会话失效：
+     *   第 1 轮超时 → 只记日志、再等一轮（云端模型排队/慢启动很常见，10s 就判死会误杀活会话）；
+     *   第 2 轮仍没动静 → 才认为会话已归档/失效，换新会话重投。
+     */
     private armWatchdog;
+    private armWatchdogRound;
     /** 会话失效后：重建会话并把这条消息再投一次（每条消息只重试一次）。 */
     private recoverAndRetry;
     /** 投递失败（归档/删除/agent 释放）：丢掉旧会话状态，下次消息重新建会话，并告知用户。 */

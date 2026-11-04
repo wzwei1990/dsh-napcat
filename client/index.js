@@ -101,7 +101,13 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'proactiveHotMessages', label: '话题门槛（观察窗口内至少多少条他人消息才考虑插话）', kind: 'number' },
         { key: 'proactiveFreshSeconds', label: '冷场门：群里安静超过多少秒就不再主动开口（0=不限）', kind: 'number' },
         { key: 'proactiveQuietHours', label: '主动发言静默时段（如 00:00-08:00,12:00-13:00）', kind: 'text' },
-        { section: '游戏攻略' },
+        { section: '会话与模型' },
+          {
+            key: 'sessionStartTimeoutSeconds',
+            label: '会话启动超时（秒，连续两轮没动静才重置会话）',
+            kind: 'number',
+          },
+          { section: '游戏攻略' },
         {
           key: 'gameWikiEnabled',
           label: '群里聊到游戏时查 wiki（真问攻略给答案；只是讨论就只当背景参考，不给攻略）',

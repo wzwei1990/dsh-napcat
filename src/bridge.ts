@@ -44,7 +44,6 @@ import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
 type HostContext = Context & { agents: AgentRegistry }
 
 /** 投递后多久没收到 turn/start 就判定会话失效。 */
-const WATCHDOG_MS = 10000
 
 interface ChatState {
   ref: ChatRef
@@ -1892,18 +1891,32 @@ export class Bridge {
     if (chat.fresh !== true) this.armWatchdog(chat, text)
   }
 
-  /** 10s 内没等到 turn/start 就认为会话已失效（典型：会话被归档），换新会话重投一次。 */
+  /**
+   * 投递后等 turn/start。**两轮**才判定会话失效：
+   *   第 1 轮超时 → 只记日志、再等一轮（云端模型排队/慢启动很常见，10s 就判死会误杀活会话）；
+   *   第 2 轮仍没动静 → 才认为会话已归档/失效，换新会话重投。
+   */
   private armWatchdog(chat: ChatState, text: string): void {
+    this.armWatchdogRound(chat, text, 1)
+  }
+
+  private armWatchdogRound(chat: ChatState, text: string, round: number): void {
     if (chat.startTimer !== undefined) clearTimeout(chat.startTimer)
-    chat.turnStarted = false
+    if (round === 1) chat.turnStarted = false
+    const waitMs = Math.max(5, this.opts.config.sessionStartTimeoutSeconds) * 1000 * round
     chat.startTimer = setTimeout(() => {
       chat.startTimer = undefined
       if (this.stopped) return
       const alive = chat.turnStarted === true || (chat.lastEventAt ?? 0) > (chat.dispatchedAt ?? 0)
       if (alive) return
+      if (round === 1) {
+        this.opts.log('warn', '会话启动偏慢（' + Math.round(waitMs / 1000) + ' 秒没动静），再等一轮: ' + chat.ref.key)
+        this.armWatchdogRound(chat, text, 2)
+        return
+      }
       this.opts.log('warn', '会话没有开始执行（可能已归档或失效），换新会话重投: ' + chat.ref.key)
       void this.recoverAndRetry(chat, text)
-    }, WATCHDOG_MS)
+    }, waitMs)
   }
 
   /** 会话失效后：重建会话并把这条消息再投一次（每条消息只重试一次）。 */
@@ -1913,13 +1926,15 @@ export class Bridge {
       await this.sendText(chat, '⚠️ 会话没有响应，已换新会话仍失败，请稍后再试')
       return
     }
-    await this.recoverChat(chat, new Error('会话没有开始执行'))
+    // 先静默重置，不立刻给群友发"消息没送进模型"；只有重投再失败才告知
+    await this.recoverChat(chat, new Error('会话没有开始执行'), false)
     try {
       const fresh = await this.ensureChat(ref)
       fresh.retried = true
       this.dispatch(fresh, text)
     } catch (error) {
       this.opts.log('warn', '重建会话失败: ' + describe(error))
+      await this.sendText(chat, '⚠️ 消息没送进模型：' + describe(error) + '\n（已重置会话，再发一条会重新建）')
     }
   }
 

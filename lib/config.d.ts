@@ -72,6 +72,8 @@ export interface Config {
     /** 运行心跳日志：每 N 分钟打一条状态（0=关闭） */
     /** 群里聊到已收录游戏时查 wiki（真问攻略给答案，讨论只当背景） */
     gameWikiEnabled: boolean;
+    /** 投递后多久没等到 turn/start 就认为会话失效（秒）；连续等两轮才重置 */
+    sessionStartTimeoutSeconds: number;
     heartbeatMinutes: number;
     logLevel: 'debug' | 'info' | 'warn';
     memoryEnabled: boolean;
