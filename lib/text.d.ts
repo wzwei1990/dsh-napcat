@@ -4,7 +4,19 @@ import type { ObMessage, ObSegment } from './types.js';
 export declare function parseCq(raw: string): ObSegment[];
 /** 归一化成消息段数组。 */
 export declare function segmentsOf(message: ObMessage | undefined): ObSegment[];
-/** 把消息段拼成给模型看的纯文本（图片/语音等转成占位符）。 */
+/** 从一段原始文本里挖出 http(s) 链接（卡片 JSON/XML 里链接常被转义成 \/ 或 &amp;）。 */
+export declare function urlsInText(raw: string): string[];
+/**
+ * 从卡片/富媒体段里挖链接与标题。
+ * QQ 群里分享 B 站视频多数不是纯文本，而是：
+ *   - json 段（com.tencent.structmsg / 小程序卡片），链接在 meta.news.jumpUrl / meta.detail_1.qqdocurl
+ *   - xml 段，链接在 url="..." / brief="..." / qqdocurl 里
+ * 只把段转成「[卡片]」会把链接丢掉 → 下游的 B 站联动永远不会触发。
+ */
+export declare function linksInSegment(seg: ObSegment): string[];
+/** 卡片的标题/摘要（给模型一点上下文，别让链接裸奔） */
+export declare function cardTitleOf(seg: ObSegment): string;
+/** 把消息段拼成给模型看的纯文本（图片/语音等转成占位符；卡片会带上里面的链接）。 */
 export declare function toText(message: ObMessage | undefined, selfId?: string, selfName?: string): string;
 /** 是否 @ 了指定 QQ（群聊门控用）。 */
 export declare function mentions(message: ObMessage | undefined, selfId: string): boolean;

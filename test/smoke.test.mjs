@@ -928,3 +928,28 @@ test('B 站注入块：像看过一样聊天，不播报不贴链接', async () 
   assert.ok(block.includes('不要贴链接'))
   assert.ok(!block.includes('根据弹幕'))
 })
+test('QQ 分享卡片：json/xml/小程序 都能挖出 B 站链接（否则永远不触发）', async () => {
+  const { toText } = await import('../lib/text.js')
+  const card = JSON.stringify({ app: 'com.tencent.structmsg', meta: { news: { title: '笑死', jumpUrl: 'https://www.bilibili.com/video/BV1GJ411x7h7?share_source=qq' } } })
+  const fromJson = toText([{ type: 'json', data: { data: card } }])
+  assert.ok(fromJson.includes('BV1GJ411x7h7'), 'json 卡片里的链接要保留')
+  assert.ok(fromJson.includes('笑死'), '卡片标题要保留')
+
+  const fromXml = toText([{ type: 'xml', data: { data: '<msg><item><title>枷笼山攻略</title><qqdocurl>https://b23.tv/AbCdEfG</qqdocurl></item></msg>' } }])
+  assert.ok(fromXml.includes('b23.tv/AbCdEfG'), 'xml 卡片里的短链要保留')
+
+  const fromApp = toText([{ type: 'light_app', data: { json_payload: '{"meta":{"detail_1":{"qqdocurl":"https://b23.tv/XyZ1234"}}}' } }])
+  assert.ok(fromApp.includes('b23.tv/XyZ1234'), '小程序卡片里的链接要保留')
+
+  // 转义形态（\/ ）
+  const escaped = toText([{ type: 'json', data: { data: '{"jumpUrl":"https:\\/\\/www.bilibili.com\\/video\\/BV1xx411c7mD"}' } }])
+  assert.ok(escaped.includes('BV1xx411c7mD'), '转义斜杠要还原')
+})
+
+test('分享卡片 → B 站联动能接上（链接可被 extractBiliLink 识别）', async () => {
+  const { toText } = await import('../lib/text.js')
+  const { extractBiliLink } = await import('../lib/bililink.js')
+  const card = JSON.stringify({ meta: { news: { jumpUrl: 'https://www.bilibili.com/video/BV1GJ411x7h7?share_source=qq&share_medium=android' } } })
+  const text = toText([{ type: 'json', data: { data: card } }])
+  assert.ok(extractBiliLink(text) !== undefined, '卡片文本里应能抽出 B 站链接')
+})

@@ -20,6 +20,7 @@ const PLACEHOLDER: Record<string, string> = {
   location: '[位置]',
   contact: '[名片]',
   markdown: '[卡片]',
+  light_app: '[卡片]',
 }
 
 /** 解析 CQ 码字符串（NapCat 配成字符串上报时的兜底；数组更常见）。 */
@@ -57,7 +58,86 @@ export function segmentsOf(message: ObMessage | undefined): ObSegment[] {
   return parseCq(String(message))
 }
 
-/** 把消息段拼成给模型看的纯文本（图片/语音等转成占位符）。 */
+/** 从一段原始文本里挖出 http(s) 链接（卡片 JSON/XML 里链接常被转义成 \/ 或 &amp;）。 */
+export function urlsInText(raw: string): string[] {
+  if (raw === '') return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  const normalized = raw
+    .replace(/\\\//g, '/')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/\\u0026/g, '&')
+    .replace(/\\u003d/g, '=')
+  for (const match of normalized.matchAll(/https?:\/\/[^\s"'<>\\]+/g)) {
+    const url = match[0].replace(/[),.;]+$/, '')
+    if (url.length < 12 || seen.has(url)) continue
+    seen.add(url)
+    out.push(url)
+  }
+  return out
+}
+
+/**
+ * 从卡片/富媒体段里挖链接与标题。
+ * QQ 群里分享 B 站视频多数不是纯文本，而是：
+ *   - json 段（com.tencent.structmsg / 小程序卡片），链接在 meta.news.jumpUrl / meta.detail_1.qqdocurl
+ *   - xml 段，链接在 url="..." / brief="..." / qqdocurl 里
+ * 只把段转成「[卡片]」会把链接丢掉 → 下游的 B 站联动永远不会触发。
+ */
+export function linksInSegment(seg: ObSegment): string[] {
+  const data = seg.data ?? {}
+  const raw: string[] = []
+  for (const key of ['data', 'content', 'url', 'file', 'summary', 'title', 'json_payload', 'payload', 'json', 'prompt']) {
+    const value = (data as Record<string, unknown>)[key]
+    if (typeof value === 'string' && value !== '') raw.push(value)
+  }
+  const urls = urlsInText(raw.join('\n'))
+  // 卡片里常先出现跳转中转（qqurl），把 B 站直链排前面
+  return urls.sort((a, b) => Number(isBiliLink(b)) - Number(isBiliLink(a)))
+}
+
+function isBiliLink(url: string): boolean {
+  return /(?:bilibili\.com|b23\.tv)/i.test(url)
+}
+
+/** 卡片的标题/摘要（给模型一点上下文，别让链接裸奔） */
+export function cardTitleOf(seg: ObSegment): string {
+  const data = (seg.data ?? {}) as Record<string, unknown>
+  // xml 卡片：标题在 <title> 里
+  const rawXml = typeof data.data === 'string' ? data.data : ''
+  if (rawXml.trim().startsWith('<')) {
+    const matched = /<title>([^<]{1,80})<\/title>/i.exec(rawXml)
+    if (matched !== null && matched[1] !== undefined) return matched[1].trim()
+  }
+  for (const key of ['title', 'summary', 'desc', 'content', 'data', 'json_payload', 'payload']) {
+    const value = data[key]
+    if (typeof value !== 'string') continue
+    const json = value.trim().startsWith('{') ? safeJson(value) : undefined
+    if (json !== undefined) {
+      const meta = (json as { meta?: Record<string, { title?: string; desc?: string }> }).meta
+      if (meta !== undefined) {
+        for (const value of Object.values(meta)) {
+          const title = value?.title ?? value?.desc
+          if (typeof title === 'string' && title.trim() !== '') return title.trim().slice(0, 60)
+        }
+      }
+      continue
+    }
+    if (key !== 'data' && value.trim() !== '' && !/^https?:/i.test(value)) return value.trim().slice(0, 60)
+  }
+  return ''
+}
+
+function safeJson(text: string): unknown {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return undefined
+  }
+}
+
+/** 把消息段拼成给模型看的纯文本（图片/语音等转成占位符；卡片会带上里面的链接）。 */
 export function toText(message: ObMessage | undefined, selfId = '', selfName = '你'): string {
   const parts: string[] = []
   for (const seg of segmentsOf(message)) {
@@ -71,6 +151,14 @@ export function toText(message: ObMessage | undefined, selfId = '', selfName = '
       if (qq === 'all') parts.push('@全体成员')
       else if (selfId !== '' && qq === selfId) parts.push('@' + selfName)
       else parts.push('@' + String(data.name ?? qq))
+      continue
+    }
+    if (seg.type === 'json' || seg.type === 'xml' || seg.type === 'markdown' || seg.type === 'light_app') {
+      const holder = PLACEHOLDER[seg.type] ?? '[卡片]'
+      const links = linksInSegment(seg)
+      const title = cardTitleOf(seg)
+      const suffix = [title, ...links].filter(part => part !== '').join(' ')
+      parts.push(holder + (suffix === '' ? '' : ' ' + suffix))
       continue
     }
     const holder = PLACEHOLDER[seg.type]
