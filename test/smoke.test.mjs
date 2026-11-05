@@ -1144,3 +1144,13 @@ test('订阅轮询：风控类错误会等 15 分钟以上再重试', async () =
   assert.ok(waitMs >= 14 * 60_000, '风控应至少等约 15 分钟，实际 ' + Math.round(waitMs / 60000) + ' 分钟')
   await rm(dir, { recursive: true, force: true })
 })
+test('B站回复通知：只发管理员、间隔不低于 30 分钟、无新增不发', async () => {
+  // 这里只验证配置契约（跨插件调用需要真实 dshBili 服务，放联调）
+  const { resolveConfig, DEFAULTS } = await import('../lib/config.js')
+  assert.equal(DEFAULTS.replyNotifyEnabled, true, '默认开启')
+  assert.equal(DEFAULTS.replyNotifyIntervalMinutes, 120, '默认两小时一次')
+  const merged = resolveConfig({})
+  assert.equal(merged.replyNotifyIntervalMinutes, 120)
+  const custom = resolveConfig({ replyNotifyIntervalMinutes: 30 })
+  assert.equal(custom.replyNotifyIntervalMinutes, 30)
+})

@@ -91,6 +91,10 @@ export interface Config {
   subscriptionMax: number
   /** 默认订阅类型（video,dynamic） */
   subscriptionTypes: string
+  /** B站评论回复 → 管理员私聊通知 */
+  replyNotifyEnabled: boolean
+  /** 检查间隔（分钟，低频即可） */
+  replyNotifyIntervalMinutes: number
   biliPushEnabled: boolean
   /** 推送轮询间隔（分钟） */
   biliPushIntervalMinutes: number
@@ -315,6 +319,8 @@ export const DEFAULTS: Config = {
   subscriptionIntervalMinutes: 10,
   subscriptionMax: 20,
   subscriptionTypes: 'video,dynamic',
+  replyNotifyEnabled: true,
+  replyNotifyIntervalMinutes: 120,
   biliPushEnabled: true,
   biliPushIntervalMinutes: 5,
   biliPushMaxPerPush: 5,

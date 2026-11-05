@@ -95,6 +95,8 @@ export declare class Bridge {
     /** 运行心跳：每 N 分钟打一条状态摘要（用来区分"没人说话"和"出故障了"） */
     private heartbeatTimer;
     private biliPushTimer;
+    private replyTimer;
+    private replyTickAt;
     /** 上次推送检查时间（节流用） */
     private biliPushLastAt;
     /** 上次订阅轮询时间（节流用） */
@@ -141,6 +143,11 @@ export declare class Bridge {
      * 没有任何 provider 时静默跳过（不提示装某个插件）。
      */
     private subscriptionTick;
+    /**
+     * B 站评论回复通知（2026-11-05）：低频检查，**只发管理员私聊，不发群**。
+     * 检查逻辑与工具 bili_reply_check 共用同一个游标（谁查过都不会重复报）。
+     */
+    private replyNotifyTick;
     private heartbeatTick;
     /**
      * 定时评估：冷清群不能只靠"来一条消息掷一次骰子"，否则十几分钟才评估一次。
