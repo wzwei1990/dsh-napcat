@@ -953,3 +953,73 @@ test('分享卡片 → B 站联动能接上（链接可被 extractBiliLink 识�
   const text = toText([{ type: 'json', data: { data: card } }])
   assert.ok(extractBiliLink(text) !== undefined, '卡片文本里应能抽出 B 站链接')
 })
+test('热量分：寒暄/刷屏算 0 分，聊正事/游戏才是热聊', async () => {
+  const { scoreHeat, isSmallTalk } = await import('../lib/proactive.js')
+  assert.equal(isSmallTalk('早'), true)
+  assert.equal(isSmallTalk('早安'), true)
+  assert.equal(isSmallTalk('哈哈哈'), true)
+  assert.equal(isSmallTalk('在吗'), true)
+  assert.equal(isSmallTalk('庞镇那个任务怎么做啊'), false)
+
+  const now = Date.now()
+  const greetings = Array.from({ length: 8 }, (_, i) => ({ at: now - i * 1000, text: '早', sender: 'u' + (i % 3) }))
+  const g = scoreHeat(greetings)
+  assert.ok(g.heat <= 2, '纯寒暄热量应该很低，实际 ' + g.heat)
+  assert.equal(g.tier, 'low')
+  assert.equal(g.allSmallTalk, true)
+
+  const gameTalk = [
+    '庞镇那个任务怎么做啊？求指点',
+    '我刚到枷笼山，玉儿的剧情还没走完',
+    '红房子打完还是进不去，是不是漏了湖上那个',
+    '榕树之心每周木要重新收集吗',
+    '风雪刀客那套装备值不值得刷',
+    '湖心任务要先打 4 个龙柱再存档',
+  ].map((text, i) => ({ at: now - i * 1000, text, sender: 'u' + (i % 3) }))
+  const h = scoreHeat(gameTalk)
+  assert.ok(h.heat >= 3, '聊游戏应该进热聊档，实际 ' + h.heat)
+  assert.equal(h.tier, 'hot')
+  assert.ok(h.participants >= 2)
+})
+
+test('热量分档：寒暄档不插话，热聊档才放开频率', async () => {
+  const { decide, newChatState, scoreHeat, TIERS } = await import('../lib/proactive.js')
+  const options = { enabled: true, ratePerHour: 4, cooldownMinutes: 5, quietHours: '', hotMessages: 6, freshSeconds: 300, heatScaling: true, heatLowMax: 2, heatHotMin: 5 }
+  const now = Date.now()
+  const state = newChatState()
+  state.lastConsiderAt = now - 60_000
+  const greetings = scoreHeat(Array.from({ length: 8 }, (_, i) => ({ at: now - i * 1000, text: '早', sender: 'u' + (i % 3) })))
+
+  // 寒暄档：可以偶尔插一句，但一小时最多 1 条
+  let sent = 0
+  const sentAt = []
+  for (let i = 0; i < 50; i += 1) {
+    const d = decide({ now, minuteOfDay: 600, options, state, recentOthers: 8, lastMessageAt: now - 1000, recentHot: 8, heat: greetings, random: () => 0 })
+    if (d.send) { sent += 1; state.lastSpokeAt = now; sentAt.push(now); state.sentAt.push(now) }
+  }
+  assert.ok(sent <= 1, '寒暄档一小时最多 1 条，实际 ' + sent)
+
+  // 热聊档：同样随机数下会发，且每小时上限存在
+  const hot = scoreHeat(Array.from({ length: 8 }, (_, i) => ({ at: now - i * 1000, text: '庞镇那个任务怎么做啊？求指点', sender: 'u' + (i % 3) })))
+  const hotState = newChatState()
+  hotState.lastConsiderAt = now - 60_000
+  let hotSent = 0
+  for (let i = 0; i < 100; i += 1) {
+    const d = decide({ now, minuteOfDay: 1200, options, state: hotState, recentOthers: 8, lastMessageAt: now - 1000, recentHot: 8, heat: hot, random: () => 0 })
+    if (d.send) { hotSent += 1; hotState.lastSpokeAt = now; hotState.sentAt.push(now) }
+  }
+  assert.ok(hotSent >= 1, '热聊档应该会说话')
+  assert.ok(hotSent <= TIERS.hot.capPerHour, '不能超过热聊档的每小时上限')
+})
+
+test('热量分档：关掉 heatScaling 时退回旧的固定 λ 逻辑', async () => {
+  const { decide, newChatState, scoreHeat } = await import('../lib/proactive.js')
+  const options = { enabled: true, ratePerHour: 4, cooldownMinutes: 5, quietHours: '', hotMessages: 6, freshSeconds: 300, heatScaling: false }
+  const now = Date.now()
+  const state = newChatState()
+  state.lastConsiderAt = now - 60_000
+  const greetings = scoreHeat(Array.from({ length: 8 }, (_, i) => ({ at: now - i * 1000, text: '早' })))
+  // 旧逻辑不看热量分：随机数 0 → 必中
+  const d = decide({ now, minuteOfDay: 600, options, state, recentOthers: 8, lastMessageAt: now - 1000, recentHot: 8, heat: greetings, random: () => 0 })
+  assert.equal(d.send, true)
+})

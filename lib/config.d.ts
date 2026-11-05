@@ -98,6 +98,12 @@ export interface Config {
     /** 话题门槛：窗口内至少多少条他人消息才考虑插话 */
     proactiveHotMessages: number;
     /** 冷场门：群里安静超过多少秒就不再主动开口（0=不限） */
+    /** 热量自适应：按消息信息量分档（寒暄克制、热聊活跃） */
+    proactiveHeatScaling: boolean;
+    /** 热量低档上限（heat < 此值 = 寒暄档） */
+    proactiveHeatLowMax: number;
+    /** 热聊档起点（heat >= 此值） */
+    proactiveHeatHotMin: number;
     proactiveFreshSeconds: number;
     memorySpacePrefix: string;
     memorySpaces: string;

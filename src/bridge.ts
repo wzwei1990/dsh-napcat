@@ -36,7 +36,7 @@ import { buildArchivePrompt, parseArchivePayload, type ArchivePayload } from './
 import { faceFor } from './faces.js'
 import { defaultMemeDirs, MemeLibrary, readMemeSettings } from './meme.js'
 import { localToBase64Url } from './media.js'
-import { decide, FRESH_SECONDS, HOT_WINDOW_MS, inQuietHours, maxPerHourOf, newChatState, parseQuietHours, pruneSentAt, windowMsOf, type ChatProactiveState } from './proactive.js'
+import { decide, FRESH_SECONDS, HOT_WINDOW_MS, inQuietHours, maxPerHourOf, newChatState, parseQuietHours, pruneSentAt, scoreHeat, windowMsOf, type ChatProactiveState, type RecentMessage } from './proactive.js'
 import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, base64UrlToBuffer, downloadToFile, ensureInbox, imageMediaType, nameFromRef } from './media.js'
 import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
@@ -288,6 +288,8 @@ export class Bridge {
   private readonly proactiveStates = new Map<string, ChatProactiveState>()
   /** 该聊天最近「他人消息」的时间戳（观察窗口内计数用）。 */
   private readonly chatter = new Map<string, number[]>()
+  /** 最近的群消息正文（热量分用：看内容而不是只数条数） */
+  private readonly recentMsgs = new Map<string, RecentMessage[]>()
   /** 首次计数时用历史缓冲回填窗口的 promise：判定前要等它，否则重启后会误判「只有 1 条」。 */
   private readonly chatterReady = new Map<string, Promise<void>>()
   /** 已投递主动发言请求、等待回复拦截的聊天。 */
@@ -320,6 +322,8 @@ export class Bridge {
     lastSelfSpokeAt: 0,
     proactiveEvalCount: 0,
     proactiveLastReason: '',
+    proactiveLastHeat: 0,
+    proactiveLastTier: '',
     proactiveLastEvalAt: 0,
     lastMessageAt: 0,
     lastHeartbeatAt: 0,
@@ -351,6 +355,13 @@ export class Bridge {
   private readonly proactiveEval = new Map<string, { count: number; lastReason: string; at: number }>()
 
   /** 记录一条他人消息（供主动发言判断"有没有人在聊"）。 */
+  /** 记一条消息正文（热量分用），只留最近 40 条 */
+  private noteRecentMessage(ref: ChatRef, text: string, sender: string, hasMedia: boolean): void {
+    const list = this.recentMsgs.get(ref.key) ?? []
+    list.push({ at: Date.now(), text: text.slice(0, 200), sender, hasMedia })
+    if (list.length > 40) list.splice(0, list.length - 40)
+    this.recentMsgs.set(ref.key, list)
+  }
   private noteChatter(ref: ChatRef): void {
     const now = Date.now()
     const windowMs = windowMsOf({ cooldownMinutes: this.opts.config.proactiveCooldownMinutes })
@@ -416,7 +427,7 @@ export class Bridge {
       ? '开 · 本期评估 ' + dEval + ' 次 · 成功 ' + dProactiveSent + ' 次'
         + (dProactive > dProactiveSent ? '（另有 ' + (dProactive - dProactiveSent) + ' 次模型选择不说）' : '')
         + (this.stats.proactiveEvalCount > 0
-          ? ' · 最近 ' + this.stats.proactiveLastReason + '（' + clockOf(this.stats.proactiveLastEvalAt) + '）'
+          ? ' · 最近 ' + this.stats.proactiveLastReason + '（' + clockOf(this.stats.proactiveLastEvalAt) + '，热量 ' + this.stats.proactiveLastHeat + '·' + (this.stats.proactiveLastTier === '' ? '?' : this.stats.proactiveLastTier) + '）'
           : ' · 还没评估过')
       : '关'
     this.opts.log('info', '[心跳] ' + (connected ? '在线' : 'NapCat 未连接')
@@ -530,8 +541,17 @@ export class Bridge {
       quietHours: cfg.proactiveQuietHours,
       hotMessages: cfg.proactiveHotMessages,
       freshSeconds: cfg.proactiveFreshSeconds,
+      heatScaling: cfg.proactiveHeatScaling,
+      heatLowMax: cfg.proactiveHeatLowMax,
+      heatHotMin: cfg.proactiveHeatHotMin,
     }
     const lastMessageAt = (this.chatter.get(ref.key) ?? []).at(-1) ?? 0
+    // 热量分：只看最近窗口内的消息内容（寒暄 0 分，聊正事/游戏高）
+    const windowMsgs = (this.recentMsgs.get(ref.key) ?? []).filter(item => now - item.at < windowMs)
+    const heat = scoreHeat(windowMsgs, {
+      lowMax: cfg.proactiveHeatLowMax,
+      hotMin: cfg.proactiveHeatHotMin,
+    })
     const decision = decide({
       now,
       minuteOfDay: local.getHours() * 60 + local.getMinutes(),
@@ -540,10 +560,13 @@ export class Bridge {
       recentOthers,
       lastMessageAt,
       recentHot: (this.chatter.get(ref.key) ?? []).filter(at => now - at < HOT_WINDOW_MS).length,
+      heat,
       quietRanges: parseQuietHours(cfg.proactiveQuietHours),
     })
     // 评估记账：心跳里能看到"到底有没有在跑、最后一次为什么没发"
     this.stats.proactiveEvalCount += 1
+    this.stats.proactiveLastHeat = heat.heat
+    this.stats.proactiveLastTier = heat.tier
     this.stats.proactiveLastReason = decision.reason
     this.stats.proactiveLastEvalAt = now
     if (this.stats.proactiveEvalCount === 1) {
@@ -565,7 +588,7 @@ export class Bridge {
       stat.lastReason = decision.reason
       if (now - stat.at > 30 * 60_000) {
         this.opts.log('info', '主动发言评估 ' + String(stat.count) + ' 次未触发（最后原因 ' + decision.reason
-          + '，近 ' + Math.round(windowMs / 60_000) + ' 分钟他人消息 ' + recentOthers + ' 条，λ=' + cfg.proactiveRatePerHour
+          + '，近 ' + Math.round(windowMs / 60_000) + ' 分钟他人消息 ' + recentOthers + ' 条，热量 ' + heat.heat + '（' + heat.tier + '），λ=' + cfg.proactiveRatePerHour
           + '，skipStreak=' + state.skipStreak + '）: ' + ref.key)
         stat.count = 0
         stat.at = now
@@ -633,7 +656,8 @@ export class Bridge {
       const latestImage = await this.latestImageOf(recent, chat.cwd)
       const imageNote = latestImage === undefined
         ? ''
-        : '【当前话题就是这张图：已经随本轮消息附上，直接对着图里的内容说，别接更早的文字话题】\n'
+        : '【当前话题就是这张图：已经随本轮消息附上】\n'
+          + '【硬要求】如果你决定说话，必须说出图里的具体东西（是谁/什么东西/在干什么），不要只评论他发了张图。\n'
       // 词表召回：命中就把"可能是哪个游戏 + 可查工具"交给模型，由它决定查不查
       const gameHint = await this.gameWiki.hintFor(recent.slice(-3).join('\n'))
       const biliHint = await this.biliLink.blockFor(recent.slice(-3).join('\n'))
@@ -1254,6 +1278,7 @@ export class Bridge {
     if (ref.kind === 'group') this.stats.groupMessages += 1
     else this.stats.privateMessages += 1
     this.noteChatter(ref)
+    this.noteRecentMessage(ref, rawText, senderNick, segmentsOf(msg.message).some(seg => seg.type === 'image' || seg.type === 'video' || seg.type === 'file' || seg.type === 'json' || seg.type === 'xml' || seg.type === 'light_app'))
 
     if (ref.kind === 'group' && this.opts.config.requireMention) {
       if (selfId === '') {

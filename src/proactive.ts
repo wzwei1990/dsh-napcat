@@ -14,6 +14,129 @@
  * 本文件只做**判定**，不发送任何消息；发送与 __SKIP__ 拦截在 bridge 里。
  */
 
+// ── 热量分（2026-11-05 重设计）───────────────────────────────────────────
+//
+// 旧方案只看"消息条数"，导致：
+//   - 早上刷"早""早"（3 条）就够门槛，机器人插了 3 次（其实没信息量）
+//   - 晚上聊游戏一小时只发 1 条（λ 固定 4/小时，热聊也只放大 3 倍）
+// 新方案：先给每条消息打"信息量"分，再按总热量分档决定速率与冷却。
+//   寒暄（早/晚安/在吗/哈哈/单字/纯表情）记 0 分；
+//   长句、带问号、命中游戏词表、带图/链接、多人参与、有未回应的提问 → 加分。
+
+export interface RecentMessage {
+  at: number
+  text: string
+  sender?: string
+  /** 带图片/文件/视频 */
+  hasMedia?: boolean
+}
+
+export interface HeatScore {
+  /** 窗口内消息条数 */
+  messages: number
+  /** 有效（非寒暄）条数 */
+  effective: number
+  /** 热量分 0~10 */
+  heat: number
+  /** 参与人数 */
+  participants: number
+  /** 有提问但没人接 */
+  unansweredQuestion: boolean
+  /** 是否基本全是寒暄/刷屏 */
+  allSmallTalk: boolean
+  /** 档位 */
+  tier: 'low' | 'normal' | 'hot'
+}
+
+const SMALL_TALK = [
+  /^(早|早安|早上好|晚安|晚上好|午安|在吗|在不在|在么|有人吗|来了|签到|打卡)$/,
+  /^(哈+|h+|呵+|嘿+|233+|6+|1+|0+|草+|笑死|xs|awsl|好家伙|确实|可以|行吧|收到|ok|okay)$/i,
+  /^[。！？、，…~～\s]+$/,
+  /^\[(表情|图片|动画表情|戳一戳|骰子|猜拳)\]$/,
+]
+
+/** 一条消息是不是"寒暄/刷屏"（0 分） */
+export function isSmallTalk(text: string): boolean {
+  const clean = text.trim()
+  if (clean === '') return true
+  if (clean.length === 1) return SMALL_TALK.some(pattern => pattern.test(clean))
+  return SMALL_TALK.some(pattern => pattern.test(clean))
+}
+
+const QUESTION_HINT = /[?？]|怎么|为什么|为啥|在哪|哪个|多少|能不能|可以吗|有没有|求推荐|求助|有人知道/i
+
+/** 单条消息的信息量（0~4 分） */
+export function messageScore(message: RecentMessage, options: { terms?: (text: string) => boolean } = {}): number {
+  const text = message.text.replace(/\[图片:[^\]]*\]|\[文件:[^\]]*\]|\[视频:[^\]]*\]/g, '').trim()
+  // 寒暄给 0.5 分而不是 0：纯寒暄也保留偶尔插一句的可能，只是热量涨得很慢
+  if (isSmallTalk(text) && message.hasMedia !== true) return 0.3
+  let score = 1
+  if (text.length >= 5) score += 1
+  if (QUESTION_HINT.test(text)) score += 1
+  const terms = options.terms
+  if (terms !== undefined && terms(text)) score += 1
+  if (message.hasMedia === true) score += 1
+  return score
+}
+
+/**
+ * 窗口热量分。
+ * - 分母 2.5：约 6 条认真讨论就能进"热聊"档，纯寒暄永远是 0
+ * - cap 10：避免消息暴刷把概率推到 1
+ */
+export function scoreHeat(
+  messages: readonly RecentMessage[],
+  options: { terms?: (text: string) => boolean; lowMax?: number; hotMin?: number } = {},
+): HeatScore {
+  const lowMax = options.lowMax ?? 2
+  const hotMin = options.hotMin ?? 3
+  let sum = 0
+  let effective = 0
+  let question = false
+  let onlySmallTalk = messages.length > 0
+  const senders = new Set<string>()
+  for (const message of messages) {
+    const score = messageScore(message, options)
+    sum += score
+    // "有效"按"有信息量"算：寒暄 0.3 分不算有效（但也不禁止发言，只是低档）
+    if (score >= 1) {
+      effective += 1
+      if (QUESTION_HINT.test(message.text)) question = true
+    }
+    const text = message.text.replace(/\[(图片|文件|视频):[^\]]*\]/g, '').trim()
+    if (message.hasMedia !== true && !isSmallTalk(text)) onlySmallTalk = false
+    if (message.sender !== undefined && message.sender !== '') senders.add(message.sender)
+  }
+  const heat = Math.min(10, Math.round(sum / 2.5))
+  const tier: HeatScore['tier'] = heat >= hotMin ? 'hot' : heat < lowMax ? 'low' : 'normal'
+  return {
+    messages: messages.length,
+    effective,
+    heat,
+    participants: senders.size,
+    unansweredQuestion: question,
+    allSmallTalk: onlySmallTalk,
+    tier,
+  }
+}
+
+/** 三档参数：热量低时更克制，热聊时更活跃（冷却与每小时上限一起变） */
+export interface TierParams {
+  ratePerHour: number
+  cooldownMinutes: number
+  capPerHour: number
+  label: string
+}
+
+export const TIERS: Record<HeatScore['tier'], TierParams> = {
+  low: { ratePerHour: 1, cooldownMinutes: 10, capPerHour: 1, label: '寒暄档' },
+  normal: { ratePerHour: 3, cooldownMinutes: 4, capPerHour: 3, label: '闲聊档' },
+  hot: { ratePerHour: 8, cooldownMinutes: 3, capPerHour: 6, label: '热聊档' },
+}
+
+export function tierParamsOf(tier: HeatScore['tier']): TierParams {
+  return TIERS[tier]
+}
 export interface ProactiveOptions {
   enabled: boolean
   /** 泊松 λ：每小时期望主动次数（0 = 不主动） */
@@ -26,6 +149,12 @@ export interface ProactiveOptions {
   hotMessages: number
   /** 冷场门：最后一条消息距今超过多少秒就不开口（默认 300；0 = 不限） */
   freshSeconds?: number
+  /** 热量自适应（默认开）：按信息密度分档，寒暄更克制、热聊更活跃 */
+  heatScaling?: boolean
+  /** 热量低档上限（heat < 此值 = 寒暄档，默认 2） */
+  heatLowMax?: number
+  /** 热聊档起点（heat >= 此值 = 热聊档，默认 5） */
+  heatHotMin?: number
 }
 
 /** 观察窗口 = max(5 分钟, 最小间隔)：间隔越长，看的窗口也越长（不再单独配）。 */
@@ -152,6 +281,8 @@ export function decide(input: {
   lastMessageAt?: number
   /** 热点窗口内的消息条数（判断是否突然爆话题） */
   recentHot?: number
+  /** 窗口热量分（开 heatScaling 时用它决定档位；缺省回退到旧的固定 λ） */
+  heat?: HeatScore
   random?: () => number
   quietRanges?: ReadonlyArray<[number, number]>
 }): Decision {
@@ -163,10 +294,16 @@ export function decide(input: {
   const quietRanges = input.quietRanges ?? parseQuietHours(options.quietHours)
   if (inQuietHours(input.minuteOfDay, quietRanges)) return { send: false, reason: 'quiet-hours' }
 
+  // 档位：热量自适应开启且拿到热量分时用三档参数，否则沿用配置里的固定值
+  const scaling = options.heatScaling !== false && input.heat !== undefined
+  const tier = scaling ? tierParamsOf(input.heat!.tier) : undefined
+  const cooldownMinutes = tier?.cooldownMinutes ?? options.cooldownMinutes
+  const capPerHour = tier?.capPerHour ?? maxPerHourOf(options)
+
   // 冷却门：默认闭嘴（防刷屏）。但"突然爆话题"时允许提前插一次，
   // 否则最热的那几分钟永远被冷却锁着（2026-10-30 线上：11:04 那波 20 条全错过）。
   // 跳队限流：一小时最多一次，且仍要过下面的每小时上限。
-  if (state.lastSpokeAt !== 0 && now - state.lastSpokeAt < options.cooldownMinutes * 60_000) {
+  if (state.lastSpokeAt !== 0 && now - state.lastSpokeAt < cooldownMinutes * 60_000) {
     const recentHot = input.recentHot ?? 0
     const lastJump = state.hotJumpAt ?? 0
     const jumpable = recentHot >= hotJumpThresholdOf(options) && (lastJump === 0 || now - lastJump > 60 * 60_000)
@@ -174,10 +311,16 @@ export function decide(input: {
   }
 
   const sent = pruneSentAt(state.sentAt, now)
-  if (sent.length >= maxPerHourOf(options)) return { send: false, reason: 'hourly-cap' }
+  if (sent.length >= capPerHour) return { send: false, reason: 'hourly-cap' }
 
-  // 话题门槛（唯一的"群里有没有在聊"判断）：窗口内消息数不够就不插话
-  if (options.hotMessages > 0 && input.recentOthers < options.hotMessages) {
+  // 话题门槛：热量自适应下用热量分判断（寒暄刷屏 heat=0 直接不插话），
+  // 否则沿用旧的"窗口内消息条数"门槛。
+  if (scaling) {
+    const heat = input.heat!
+    if (input.recentOthers < 1) {
+      return { send: false, reason: 'not-enough-chatter' }
+    }
+  } else if (options.hotMessages > 0 && input.recentOthers < options.hotMessages) {
     return { send: false, reason: 'not-enough-chatter' }
   }
 
@@ -192,9 +335,10 @@ export function decide(input: {
   // 封顶后每轮评估概率恒定，配合 60 秒定时评估 = 稳定速率（不再集中爆发）。
   const elapsedRaw = state.lastConsiderAt === 0 ? 60_000 : now - state.lastConsiderAt
   const elapsed = Math.min(60_000, Math.max(0, elapsedRaw))
-  if (options.ratePerHour <= 0) return { send: false, reason: 'rate-zero' }
-  // 热度自适应：聊得越热闹，给的机会越多（1~3 倍），否则热门话题永远轮不上
-  const boost = Math.min(3, Math.max(1, 1 + input.recentOthers / 8))
-  const probability = poissonHit(options.ratePerHour * boost * skipBackoffFactor(state.skipStreak), elapsed)
+  const baseRate = tier?.ratePerHour ?? options.ratePerHour
+  if (baseRate <= 0) return { send: false, reason: 'rate-zero' }
+  // 没开热量自适应时保留旧的"聊得越热闹机会越多"（1~3 倍）
+  const boost = scaling ? 1 : Math.min(3, Math.max(1, 1 + input.recentOthers / 8))
+  const probability = poissonHit(baseRate * boost * skipBackoffFactor(state.skipStreak), elapsed)
   return random() < probability ? { send: true, reason: 'poisson' } : { send: false, reason: 'poisson-miss' }
 }

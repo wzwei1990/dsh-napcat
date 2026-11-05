@@ -95,6 +95,8 @@ export function buildBiliBlock(data: BiliData): string {
     const labels = (data.storyboardTimeline ?? []).map(item => '#' + String(item.index) + ' ' + item.label).join('  ')
     lines.push('画面分镜：[图片: ' + data.storyboardPath + ']（' + (labels === '' ? '9 格' : labels) + '）')
   }
+  lines.push('[硬要求] 你这一条必须提到视频里的具体信息（标题里的东西 / 画面内容 / 某个弹幕梗），')
+  lines.push('         不许只评论他发了张卡片或发了个链接这种空话——那等于没看。')
   lines.push('[怎么用] 像真的看过一样随口接话：可以评价、吐槽、接梗、追问，1~2 句就够；')
   lines.push('         不要说什么"弹幕里提到/字幕里写着"这种话，也不要贴链接、不要列点；')
   lines.push('         只有对方真的在问视频内容时，才认真讲它讲了什么。')
@@ -113,6 +115,7 @@ export interface BiliContextOptions {
 
 export class BiliLink {
   private readonly options: BiliContextOptions
+  private lastWarnAt = 0
 
   constructor(options: BiliContextOptions) {
     this.options = options
@@ -163,7 +166,15 @@ export class BiliLink {
       this.options.log('info', 'B 站视频已解析：' + info.title + '（弹幕 ' + String(summary.total) + ' 条）')
       return buildBiliBlock({ info, summary, subtitleText, storyboardPath, storyboardTimeline })
     } catch (error) {
-      this.options.log('debug', 'B 站解析失败（静默跳过）: ' + (error instanceof Error ? error.message : String(error)))
+      const message = error instanceof Error ? error.message : String(error)
+      // 失败默认静默（不该在群里喊），但要能在日志里看到：同一小时只报一次
+      const now = Date.now()
+      if (now - this.lastWarnAt > 60 * 60_000) {
+        this.lastWarnAt = now
+        this.options.log('warn', 'B 站解析失败（本条消息不带视频上下文）: ' + message)
+      } else {
+        this.options.log('debug', 'B 站解析失败: ' + message)
+      }
       return undefined
     }
   }

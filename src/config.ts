@@ -101,6 +101,12 @@ export interface Config {
   /** 话题门槛：窗口内至少多少条他人消息才考虑插话 */
   proactiveHotMessages: number
   /** 冷场门：群里安静超过多少秒就不再主动开口（0=不限） */
+  /** 热量自适应：按消息信息量分档（寒暄克制、热聊活跃） */
+  proactiveHeatScaling: boolean
+  /** 热量低档上限（heat < 此值 = 寒暄档） */
+  proactiveHeatLowMax: number
+  /** 热聊档起点（heat >= 此值） */
+  proactiveHeatHotMin: number
   proactiveFreshSeconds: number
   memorySpacePrefix: string
   memorySpaces: string
@@ -208,6 +214,12 @@ export const Config: Z<Config> = z.object({
   proactiveCooldownMinutes: z.number().default(10).description('两次主动发言的最小间隔（分钟）').volatile(),
   proactiveQuietHours: z.string().default('00:00-08:00').description('静默时段，如 00:00-08:00,12:00-13:00').volatile(),
   proactiveHotMessages: z.natural().default(3).description('话题门槛：观察窗口内至少多少条他人消息才考虑插话（0=不设门槛）').volatile(),
+  proactiveHeatScaling: z.boolean().default(true)
+    .description('按消息信息量自适应频率（寒暄少说、聊正事多说）').volatile(),
+  proactiveHeatLowMax: z.natural().default(2)
+    .description('热量低档上限（低于它就当寒暄处理）').volatile(),
+  proactiveHeatHotMin: z.natural().default(3)
+    .description('热聊档起点（达到它就放开频率）').volatile(),
   proactiveFreshSeconds: z.natural().default(300).description('冷场门：群里安静超过多少秒就不再主动开口（0=不限）').volatile(),
   memoryBackend: z.union([z.const('mnemon'), z.const('file')]).default('mnemon').description('长期记忆后端：file=本地文件（推荐，插件自管）；mnemon=交给模型用 mnemon 工具写（需在本群配置 memorySpaces）').volatile(),
   memorySpaces: z.string().default('').description('mnemon 后端用：每行 group:<群号>=<记忆空间id>（在 mnemon 面板建好空间后填 id）').volatile(),
@@ -281,6 +293,9 @@ export const DEFAULTS: Config = {
   proactiveCooldownMinutes: 10,
   proactiveQuietHours: '00:00-08:00',
   proactiveHotMessages: 3,
+  proactiveHeatScaling: true,
+  proactiveHeatLowMax: 2,
+  proactiveHeatHotMin: 3,
   proactiveFreshSeconds: 300,
   memoryBackend: 'mnemon',
   memorySpaces: '',

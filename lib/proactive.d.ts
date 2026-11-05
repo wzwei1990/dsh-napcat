@@ -13,6 +13,54 @@
  *
  * 本文件只做**判定**，不发送任何消息；发送与 __SKIP__ 拦截在 bridge 里。
  */
+export interface RecentMessage {
+    at: number;
+    text: string;
+    sender?: string;
+    /** 带图片/文件/视频 */
+    hasMedia?: boolean;
+}
+export interface HeatScore {
+    /** 窗口内消息条数 */
+    messages: number;
+    /** 有效（非寒暄）条数 */
+    effective: number;
+    /** 热量分 0~10 */
+    heat: number;
+    /** 参与人数 */
+    participants: number;
+    /** 有提问但没人接 */
+    unansweredQuestion: boolean;
+    /** 是否基本全是寒暄/刷屏 */
+    allSmallTalk: boolean;
+    /** 档位 */
+    tier: 'low' | 'normal' | 'hot';
+}
+/** 一条消息是不是"寒暄/刷屏"（0 分） */
+export declare function isSmallTalk(text: string): boolean;
+/** 单条消息的信息量（0~4 分） */
+export declare function messageScore(message: RecentMessage, options?: {
+    terms?: (text: string) => boolean;
+}): number;
+/**
+ * 窗口热量分。
+ * - 分母 2.5：约 6 条认真讨论就能进"热聊"档，纯寒暄永远是 0
+ * - cap 10：避免消息暴刷把概率推到 1
+ */
+export declare function scoreHeat(messages: readonly RecentMessage[], options?: {
+    terms?: (text: string) => boolean;
+    lowMax?: number;
+    hotMin?: number;
+}): HeatScore;
+/** 三档参数：热量低时更克制，热聊时更活跃（冷却与每小时上限一起变） */
+export interface TierParams {
+    ratePerHour: number;
+    cooldownMinutes: number;
+    capPerHour: number;
+    label: string;
+}
+export declare const TIERS: Record<HeatScore['tier'], TierParams>;
+export declare function tierParamsOf(tier: HeatScore['tier']): TierParams;
 export interface ProactiveOptions {
     enabled: boolean;
     /** 泊松 λ：每小时期望主动次数（0 = 不主动） */
@@ -25,6 +73,12 @@ export interface ProactiveOptions {
     hotMessages: number;
     /** 冷场门：最后一条消息距今超过多少秒就不开口（默认 300；0 = 不限） */
     freshSeconds?: number;
+    /** 热量自适应（默认开）：按信息密度分档，寒暄更克制、热聊更活跃 */
+    heatScaling?: boolean;
+    /** 热量低档上限（heat < 此值 = 寒暄档，默认 2） */
+    heatLowMax?: number;
+    /** 热聊档起点（heat >= 此值 = 热聊档，默认 5） */
+    heatHotMin?: number;
 }
 /** 观察窗口 = max(5 分钟, 最小间隔)：间隔越长，看的窗口也越长（不再单独配）。 */
 export declare function windowMsOf(options: Pick<ProactiveOptions, 'cooldownMinutes'>): number;
@@ -97,6 +151,8 @@ export declare function decide(input: {
     lastMessageAt?: number;
     /** 热点窗口内的消息条数（判断是否突然爆话题） */
     recentHot?: number;
+    /** 窗口热量分（开 heatScaling 时用它决定档位；缺省回退到旧的固定 λ） */
+    heat?: HeatScore;
     random?: () => number;
     quietRanges?: ReadonlyArray<[number, number]>;
 }): Decision;

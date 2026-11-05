@@ -99,7 +99,9 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'proactiveRatePerHour', label: '主动发言频率 λ（次/小时，0=不主动）', kind: 'number' },
         { key: 'proactiveCooldownMinutes', label: '两次主动发言最小间隔（分钟）· 同时决定观察窗口与每小时上限', kind: 'number' },
         { key: 'proactiveHotMessages', label: '话题门槛（观察窗口内至少多少条他人消息才考虑插话）', kind: 'number' },
-        { key: 'proactiveFreshSeconds', label: '冷场门：群里安静超过多少秒就不再主动开口（0=不限）', kind: 'number' },
+        { key: 'proactiveHeatScaling', label: '按话题热度自适应：寒暄少说、聊正事多说（推荐开）', kind: 'boolean' },
+      { key: 'proactiveHeatLowMax', label: '寒暄档上限：热量低于此值按寒暄处理（默认 2）', kind: 'number' },
+      { key: 'proactiveHeatHotMin', label: '热聊档起点：热量达到此值放开频率（默认 3）', kind: 'number' },      { key: 'proactiveFreshSeconds', label: '冷场门：群里安静超过多少秒就不再主动开口（0=不限）', kind: 'number' },
         { key: 'proactiveQuietHours', label: '主动发言静默时段（如 00:00-08:00,12:00-13:00）', kind: 'text' },
         { section: '会话与模型' },
           {

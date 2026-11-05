@@ -102,6 +102,7 @@ export interface BiliContextOptions {
 }
 export declare class BiliLink {
     private readonly options;
+    private lastWarnAt;
     constructor(options: BiliContextOptions);
     private service;
     /** 消息里有 B 站链接就返回注入块；失败/无服务静默返回 undefined */

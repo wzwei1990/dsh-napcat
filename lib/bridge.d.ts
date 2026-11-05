@@ -60,6 +60,8 @@ export declare class Bridge {
     private readonly proactiveStates;
     /** 该聊天最近「他人消息」的时间戳（观察窗口内计数用）。 */
     private readonly chatter;
+    /** 最近的群消息正文（热量分用：看内容而不是只数条数） */
+    private readonly recentMsgs;
     /** 首次计数时用历史缓冲回填窗口的 promise：判定前要等它，否则重启后会误判「只有 1 条」。 */
     private readonly chatterReady;
     /** 已投递主动发言请求、等待回复拦截的聊天。 */
@@ -102,6 +104,8 @@ export declare class Bridge {
     /** 评估计数（每群：窗口内评估次数 + 最后一次未中原因），用于 30 分钟一条诊断 */
     private readonly proactiveEval;
     /** 记录一条他人消息（供主动发言判断"有没有人在聊"）。 */
+    /** 记一条消息正文（热量分用），只留最近 40 条 */
+    private noteRecentMessage;
     private noteChatter;
     /**
      * 运行心跳（每 60 秒检查一次，按配置间隔打一条 info）：
