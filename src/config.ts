@@ -82,6 +82,22 @@ export interface Config {
   biliSubtitleChars: number
   /** B 站链接是否也抽分镜（画面兜底，需 ffmpeg） */
   biliStoryboard: boolean
+  /** 是否接收 B 站 UP 更新推送（由 dsh-bili 订阅产生） */
+  /** 订阅轮询总开关（订阅表在 napcat 这里） */
+  subscriptionEnabled: boolean
+  /** 订阅轮询间隔（分钟，最小 5） */
+  subscriptionIntervalMinutes: number
+  /** 订阅数量上限 */
+  subscriptionMax: number
+  /** 默认订阅类型（video,dynamic） */
+  subscriptionTypes: string
+  biliPushEnabled: boolean
+  /** 推送轮询间隔（分钟） */
+  biliPushIntervalMinutes: number
+  /** 单次最多推几条 */
+  biliPushMaxPerPush: number
+  /** 推送免打扰时段（留空=不限制） */
+  biliPushQuietHours: string
   sessionStartTimeoutSeconds: number
   heartbeatMinutes: number
   logLevel: 'debug' | 'info' | 'warn'
@@ -198,6 +214,22 @@ export const Config: Z<Config> = z.object({
     .description('有字幕时附带多少字（0=不取字幕）').volatile(),
   biliStoryboard: z.boolean().default(true)
     .description('B 站链接也抽分镜图（需要 dsh-bili + ffmpeg）').volatile(),
+  subscriptionEnabled: z.boolean().default(true)
+    .description('订阅轮询总开关').volatile(),
+  subscriptionIntervalMinutes: z.natural().default(10)
+    .description('订阅轮询间隔（分钟，最小 5）').volatile(),
+  subscriptionMax: z.natural().default(20)
+    .description('订阅数量上限').volatile(),
+  subscriptionTypes: z.string().default('video,dynamic')
+    .description('默认订阅类型：video,dynamic').volatile(),
+  biliPushEnabled: z.boolean().default(true)
+    .description('接收 B 站 UP 更新推送（dsh-bili 订阅 → 群）').volatile(),
+  biliPushIntervalMinutes: z.natural().default(5)
+    .description('推送轮询间隔（分钟）').volatile(),
+  biliPushMaxPerPush: z.natural().default(5)
+    .description('单次最多推几条').volatile(),
+  biliPushQuietHours: z.string().default('')
+    .description('B 站链接也抽分镜图（需要 dsh-bili + ffmpeg）').volatile(),
   sessionStartTimeoutSeconds: z.natural().default(20)
     .description('投递后多久没等到会话开始（秒）。慢模型/云端可调大；会等两轮才重置会话').volatile(),
   heartbeatMinutes: z.natural().default(10).description('运行心跳：每 N 分钟打一条状态摘要（0=关闭）').volatile(),
@@ -279,6 +311,14 @@ export const DEFAULTS: Config = {
   biliEnabled: true,
   biliSubtitleChars: 400,
   biliStoryboard: true,
+  subscriptionEnabled: true,
+  subscriptionIntervalMinutes: 10,
+  subscriptionMax: 20,
+  subscriptionTypes: 'video,dynamic',
+  biliPushEnabled: true,
+  biliPushIntervalMinutes: 5,
+  biliPushMaxPerPush: 5,
+  biliPushQuietHours: '',
   sessionStartTimeoutSeconds: 20,
   heartbeatMinutes: 10,
   logLevel: 'info',

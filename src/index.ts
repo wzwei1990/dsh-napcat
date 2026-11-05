@@ -15,6 +15,8 @@ import { Config, resolveConfig } from './config.js'
 import type { Config as ConfigShape } from './config.js'
 import { OneBotConnection, type LogLevel } from './onebot.js'
 import { registerTools } from './tools.js'
+import { SubscriptionStore } from './subscriptions.js'
+import { ProviderRegistry } from './providers.js'
 import type { ObEvent } from './types.js'
 
 export { Config }
@@ -56,7 +58,12 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
     },
   })
 
-  const bridge = new Bridge({ ctx, config, conn, log })
+  // 订阅：数据源注册表 + 订阅表（与 Bridge 共用一个 store 实例，避免双写）
+  const subStore = new SubscriptionStore({ log })
+  const subRegistry = new ProviderRegistry({ ctx, log })
+  void subStore.load()
+  const bridge = new Bridge({
+    subscriptions: { store: subStore, registry: subRegistry }, ctx, config, conn, log })
   onEvent = event => {
     void bridge.handleEvent(event).catch(error => {
       log('warn', '处理入站事件失败: ' + (error instanceof Error ? error.message : String(error)))
@@ -68,6 +75,7 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
   }
 
   registerTools(ctx, conn, log, {
+    subscriptions: { store: subStore, registry: subRegistry },
     keyForSession: sessionId => bridge.keyForSession(sessionId),
     allowedGroups: () => config.groupAllowFrom,
     rememberSpace: (chatKey, spaceId) => bridge.saveMemorySpace(chatKey, spaceId),

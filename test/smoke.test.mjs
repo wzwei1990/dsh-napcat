@@ -1023,3 +1023,65 @@ test('热量分档：关掉 heatScaling 时退回旧的固定 λ 逻辑', async 
   const d = decide({ now, minuteOfDay: 600, options, state, recentOthers: 8, lastMessageAt: now - 1000, recentHot: 8, heat: greetings, random: () => 0 })
   assert.equal(d.send, true)
 })
+test('B 站订阅推送：格式化成一条群消息，且按群过滤', async () => {
+  const { formatPush, BiliPusher } = await import('../lib/bilipush.js')
+  const items = [
+    { id: 'bili:BV1', kind: 'video', title: '新视频标题', url: 'https://b23.tv/x', pubdate: 1, groups: ['group:1'], subName: '半佛仙人', providerLabel: 'B站', extra: '3 分钟' },
+    { id: 'bili:9', kind: 'dynamic', title: '发了一张图', url: '', pubdate: 2, groups: ['group:1'], subName: '半佛仙人', providerLabel: 'B站', extra: '2 张图' },
+  ]
+  const text = formatPush(items)
+  assert.ok(text.includes('【B站更新】'))
+  assert.ok(text.includes('半佛仙人'))
+  assert.ok(text.includes('新视频标题'))
+  assert.ok(text.includes('3 分钟'))
+  assert.ok(!text.includes('undefined'))
+
+  // 假服务：只把 group:1 的条目给 group:1
+  const calls = []
+  const svc = {
+    pending: (consumer, limit, target) => items.filter(item => item.groups.includes(target)),
+    ack: async (ids, consumer) => { calls.push({ ids, consumer }) },
+  }
+  const pusher = new BiliPusher({ ctx: { get: () => svc }, enabled: true, maxPerPush: 5, quietRanges: [], log: () => {} })
+  assert.equal(pusher.hasService(), true)
+  const taken = pusher.take('group:1')
+  assert.equal(taken.items.length, 2)
+  assert.equal(pusher.take('group:2'), undefined, '别的群不该拿到')
+  await pusher.ack(taken.consumer, taken.items)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].consumer, 'napcat:group:1')
+  assert.deepEqual(calls[0].ids.sort(), ['bili:9', 'bili:BV1'])
+})
+
+test('B 站订阅推送：没装 dsh-bili 时静默跳过', async () => {
+  const { BiliPusher } = await import('../lib/bilipush.js')
+  const pusher = new BiliPusher({ ctx: { get: () => undefined }, enabled: true, maxPerPush: 5, quietRanges: [], log: () => {} })
+  assert.equal(pusher.hasService(), false)
+  assert.equal(pusher.take('group:1'), undefined)
+})
+test('订阅（provider 无关）：upsert 合并类型/群、pending 按群过滤、ack 生效', async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { SubscriptionStore } = await import('../lib/subscriptions.js')
+  const dir = await mkdtemp(join(tmpdir(), 'napcat-sub-'))
+  const store = new SubscriptionStore({ dir })
+  await store.load()
+
+  const a = await store.upsert({ provider: 'bili', key: '1', name: 'UP甲', types: ['video'], groups: ['group:1'] })
+  assert.equal(a.created, true)
+  const b = await store.upsert({ provider: 'bili', key: '1', name: 'UP甲', types: ['dynamic'], groups: ['group:2'] })
+  assert.equal(b.created, false)
+  assert.deepEqual([...b.subscription.types].sort(), ['dynamic', 'video'])
+  assert.deepEqual([...b.subscription.groups].sort(), ['group:1', 'group:2'])
+
+  await store.push([
+    { id: 'bili:BV1', kind: 'video', title: '视频A', url: 'u1', pubdate: 1, provider: 'bili', providerLabel: 'B站', subKey: '1', subName: 'UP甲', groups: ['group:1'] },
+    { id: 'bili:BV2', kind: 'video', title: '视频B', url: 'u2', pubdate: 2, provider: 'bili', providerLabel: 'B站', subKey: '1', subName: 'UP甲', groups: ['group:2'] },
+  ])
+  assert.equal(store.pending(undefined, 10, 'group:1').length, 1, '按群过滤')
+  await store.ack(['bili:BV1'], 'napcat:group:1')
+  assert.equal(store.pending('napcat:group:1', 10, 'group:1').length, 0)
+  assert.equal(store.pending('napcat:group:2', 10, 'group:2').length, 1)
+  await rm(dir, { recursive: true, force: true })
+})

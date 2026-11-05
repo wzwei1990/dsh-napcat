@@ -125,6 +125,18 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
             label: '同时抽分镜图（画面兜底，需要 dsh-bili + ffmpeg）',
             kind: 'boolean',
           },
+          {
+            key: 'biliPushEnabled',
+            label: '接收订阅更新推送（群）',
+            kind: 'boolean',
+          },
+          { key: 'subscriptionEnabled', label: '订阅轮询（博主更新 → 推送）', kind: 'boolean' },
+          { key: 'subscriptionIntervalMinutes', label: '订阅轮询间隔（分钟，最小 5）', kind: 'number' },
+          { key: 'subscriptionMax', label: '订阅数量上限', kind: 'number' },
+          { key: 'subscriptionTypes', label: '默认订阅类型（video,dynamic）', kind: 'text' },
+          { key: 'biliPushIntervalMinutes', label: '推送检查间隔（分钟）', kind: 'number' },
+          { key: 'biliPushMaxPerPush', label: '单次最多推几条', kind: 'number' },
+          { key: 'biliPushQuietHours', label: '推送免打扰时段（如 00:00-08:00，留空=不限）', kind: 'text' },
           { section: '游戏攻略' },
         {
           key: 'gameWikiEnabled',

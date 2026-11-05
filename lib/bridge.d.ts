@@ -10,12 +10,19 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { Config } from './config.js';
 import type { LogLevel, OneBotConnection } from './onebot.js';
+import { SubscriptionStore } from './subscriptions.js';
+import { ProviderRegistry } from './providers.js';
 import type { ObEvent } from './types.js';
 export interface BridgeOptions {
     ctx: Context;
     config: Config;
     conn: OneBotConnection;
     log(level: LogLevel, message: string): void;
+    /** 订阅表 / 数据源（与工具共用同一实例；缺省自建） */
+    subscriptions?: {
+        store: SubscriptionStore;
+        registry: ProviderRegistry;
+    };
 }
 export declare class Bridge {
     private readonly opts;
@@ -25,6 +32,13 @@ export declare class Bridge {
     private readonly gameWiki;
     /** B 站链接 → 「看过」上下文（弹幕高光 + 字幕节选） */
     private readonly biliLink;
+    /** B 站 UP 更新 → 群推送（读 outbox，ack 后不重复） */
+    private readonly biliPusher;
+    /** 订阅表（B 站/以后其它平台共用） */
+    /** 由 index 传入，保证工具与轮询共用同一个 store */
+    private readonly subStore;
+    /** 数据源注册表 */
+    private readonly providers;
     /** 已尝试预热的聊天（每会话一次）。 */
     /** 上次预热尝试时间（避免频繁重试）。 */
     private readonly warmAttempts;
@@ -80,6 +94,11 @@ export declare class Bridge {
     private proactiveTimer;
     /** 运行心跳：每 N 分钟打一条状态摘要（用来区分"没人说话"和"出故障了"） */
     private heartbeatTimer;
+    private biliPushTimer;
+    /** 上次推送检查时间（节流用） */
+    private biliPushLastAt;
+    /** 上次订阅轮询时间（节流用） */
+    private subTickAt;
     private readonly stats;
     private readonly archiveAgents;
     private readonly archiveRunning;
@@ -111,6 +130,17 @@ export declare class Bridge {
      * 运行心跳（每 60 秒检查一次，按配置间隔打一条 info）：
      * 回答"现在到底什么情况"——连没连上、收了多少消息、回复了几轮、主动发言开没开。
      */
+    /**
+     * B 站 UP 更新推送：读 dsh-bili 的 outbox（按群过滤），发到群里再 ack。
+     * 完全解耦：没装 dsh-bili 时 hasService() 为 false，静默跳过。
+     */
+    /**
+     * 订阅轮询 + 推送：
+     *   ① 取一个到期订阅 → 用对应 provider 拉最新 → 写队列
+     *   ② 把队列里属于本群的条目发出去 → ack
+     * 没有任何 provider 时静默跳过（不提示装某个插件）。
+     */
+    private subscriptionTick;
     private heartbeatTick;
     /**
      * 定时评估：冷清群不能只靠"来一条消息掷一次骰子"，否则十几分钟才评估一次。

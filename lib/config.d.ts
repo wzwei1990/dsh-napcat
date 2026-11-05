@@ -79,6 +79,22 @@ export interface Config {
     biliSubtitleChars: number;
     /** B 站链接是否也抽分镜（画面兜底，需 ffmpeg） */
     biliStoryboard: boolean;
+    /** 是否接收 B 站 UP 更新推送（由 dsh-bili 订阅产生） */
+    /** 订阅轮询总开关（订阅表在 napcat 这里） */
+    subscriptionEnabled: boolean;
+    /** 订阅轮询间隔（分钟，最小 5） */
+    subscriptionIntervalMinutes: number;
+    /** 订阅数量上限 */
+    subscriptionMax: number;
+    /** 默认订阅类型（video,dynamic） */
+    subscriptionTypes: string;
+    biliPushEnabled: boolean;
+    /** 推送轮询间隔（分钟） */
+    biliPushIntervalMinutes: number;
+    /** 单次最多推几条 */
+    biliPushMaxPerPush: number;
+    /** 推送免打扰时段（留空=不限制） */
+    biliPushQuietHours: string;
     sessionStartTimeoutSeconds: number;
     heartbeatMinutes: number;
     logLevel: 'debug' | 'info' | 'warn';
