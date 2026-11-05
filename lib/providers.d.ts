@@ -36,6 +36,8 @@ export interface BiliServiceLike {
         url: string;
         imageCount: number;
     }>>;
+    /** 空间接口风控剩余时间（ms），0=正常 */
+    spaceRiskRemainingMs?: () => number;
     search?: (query: string, options?: {
         page?: number;
         order?: string;
@@ -69,6 +71,8 @@ export declare class BiliFeedProvider implements FeedProvider {
         name: string;
         latestPubdate?: number;
     }>;
+    /** 最近一次失败原因（供上层日志） */
+    lastError: string;
     latest(key: string, types: readonly FeedType[]): Promise<FeedItem[]>;
 }
 export declare class ProviderRegistry {

@@ -17,6 +17,8 @@ export interface BiliServiceLike {
   searchUser?: (query: string) => Promise<Array<{ mid: number; name: string; fans?: number }>>
   upVideos?: (mid: number, page?: number, pageSize?: number) => Promise<Array<{ bvid: string; title: string; pubdate: number; durationSec: number; url: string }>>
   upDynamics?: (mid: number, limit?: number) => Promise<Array<{ id: string; type: string; text: string; pubdate: number; url: string; imageCount: number }>>
+  /** 空间接口风控剩余时间（ms），0=正常 */
+  spaceRiskRemainingMs?: () => number
   search?: (query: string, options?: { page?: number; order?: string; duration?: number }) => Promise<{ hits: Array<{ bvid: string; title: string; up: string; mid: number; play: number; durationSec: number; url: string }>; total: number }>
 }
 
@@ -72,26 +74,49 @@ export class BiliFeedProvider implements FeedProvider {
     }
   }
 
+  /** 最近一次失败原因（供上层日志） */
+  lastError = ''
+
   async latest(key: string, types: readonly FeedType[]): Promise<FeedItem[]> {
     const mid = Number(key)
     if (!Number.isFinite(mid) || mid <= 0) throw new Error('无效的 UP mid：' + key)
     const items: FeedItem[] = []
+    let videoFetchFailed = false
     if (types.includes('video') && this.service.upVideos !== undefined) {
-      const videos = await this.service.upVideos(mid, 1, 10)
-      for (const video of videos) {
-        items.push({
-          id: video.bvid,
-          kind: 'video',
-          title: video.title,
-          url: video.url,
-          pubdate: video.pubdate,
-          ...(video.durationSec > 0 ? { extra: Math.round(video.durationSec / 60) + ' 分钟' } : {}),
-        })
+      try {
+        const videos = await this.service.upVideos(mid, 1, 10)
+        for (const video of videos) {
+          items.push({
+            id: video.bvid,
+            kind: 'video',
+            title: video.title,
+            url: video.url,
+            pubdate: video.pubdate,
+            ...(video.durationSec > 0 ? { extra: Math.round(video.durationSec / 60) + ' 分钟' } : {}),
+          })
+        }
+      } catch (error) {
+        // 投稿接口被风控时不要整轮失败：动态里的"视频动态"也能发现新投稿
+        videoFetchFailed = true
+        this.lastError = error instanceof Error ? error.message : String(error)
       }
     }
-    if (types.includes('dynamic') && this.service.upDynamics !== undefined) {
+    if ((types.includes('dynamic') || videoFetchFailed) && this.service.upDynamics !== undefined) {
       const dynamics = await this.service.upDynamics(mid, 10)
       for (const dynamic of dynamics) {
+        // 视频动态（DYNAMIC_TYPE_AV）当作"新视频"兜底：标题在 text 里，id 用动态 id
+        if (videoFetchFailed && dynamic.type === 'DYNAMIC_TYPE_AV' && dynamic.text !== '') {
+          items.push({
+            id: 'av-' + dynamic.id,
+            kind: 'video',
+            title: dynamic.text.slice(0, 80),
+            url: dynamic.url,
+            pubdate: dynamic.pubdate,
+            extra: '来自动态',
+          })
+          continue
+        }
+        if (!types.includes('dynamic')) continue
         items.push({
           id: dynamic.id,
           kind: 'dynamic',
@@ -101,6 +126,9 @@ export class BiliFeedProvider implements FeedProvider {
           ...(dynamic.imageCount > 0 ? { extra: dynamic.imageCount + ' 张图' } : {}),
         })
       }
+    }
+    if (items.length === 0 && videoFetchFailed && this.lastError !== '') {
+      throw new Error(this.lastError)
     }
     return items.sort((a, b) => b.pubdate - a.pubdate)
   }

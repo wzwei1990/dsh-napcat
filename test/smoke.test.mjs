@@ -1108,3 +1108,39 @@ test('工作区目录：workspacePath 留空时群聊也必须一group一目录�
   assert.ok(withBase.startsWith('E:/dsnworkspace'), '应基于配置路径')
   assert.ok(withBase.includes('group-9'))
 })
+test('B 站数据源：投稿接口风控时用动态里的视频动态兜底', async () => {
+  const { BiliFeedProvider } = await import('../lib/providers.js')
+  const svc = {
+    resolveUp: async () => ({ mid: 70666, name: '舍长驾到' }),
+    upVideos: async () => { throw new Error('HTTP 412') },
+    upDynamics: async () => ([
+      { id: 'd1', type: 'DYNAMIC_TYPE_AV', text: '新视频：今天整点啥', pubdate: 300, url: 'https://t.bilibili.com/d1', imageCount: 0 },
+      { id: 'd2', type: 'DYNAMIC_TYPE_WORD', text: '随便说两句', pubdate: 200, url: 'https://t.bilibili.com/d2', imageCount: 0 },
+    ]),
+    searchUser: async () => [{ mid: 70666, name: '舍长驾到' }],
+  }
+  const provider = new BiliFeedProvider(svc)
+  const items = await provider.latest('70666', ['video'])
+  assert.equal(items.length, 1, '风控时只应拿到动态里的视频动态')
+  assert.equal(items[0].kind, 'video')
+  assert.ok(items[0].title.includes('新视频'))
+  assert.equal(items[0].extra, '来自动态')
+})
+
+test('订阅轮询：风控类错误会等 15 分钟以上再重试', async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { SubscriptionStore, pollSubscription } = await import('../lib/subscriptions.js')
+  const dir = await mkdtemp(join(tmpdir(), 'napcat-risk-'))
+  const store = new SubscriptionStore({ dir })
+  await store.load()
+  const { subscription } = await store.upsert({ provider: 'bili', key: '1', name: 'UP', types: ['video'], groups: [], lastSeenPubdate: 100 })
+  const broken = { latest: async () => { throw new Error('HTTP 412 风控') } }
+  const before = Date.now()
+  const result = await pollSubscription(subscription, { store, provider: broken, intervalMinutes: 10 })
+  const waitMs = result.subscription.nextCheckAt - before
+  assert.ok(result.error !== undefined)
+  assert.ok(waitMs >= 14 * 60_000, '风控应至少等约 15 分钟，实际 ' + Math.round(waitMs / 60000) + ' 分钟')
+  await rm(dir, { recursive: true, force: true })
+})

@@ -316,7 +316,8 @@ export async function pollSubscription(subscription: Subscription, options: Poll
     current.lastSeenPubdate = newest
     current.recentIds = [...fresh.map(item => item.id.split(':').slice(1).join(':')), ...current.recentIds].slice(0, 40)
     current.failures = 0
-    current.nextCheckAt = now + options.intervalMinutes * 60_000
+    // 加一点抖动，避免多个订阅同一分钟齐发
+    current.nextCheckAt = now + options.intervalMinutes * 60_000 + Math.floor(Math.random() * 60_000)
     await options.store.update(current)
     if (added > 0) options.log?.('info', '订阅更新 ' + current.name + '：' + String(added) + ' 条')
     return { subscription: current, added }
@@ -324,7 +325,9 @@ export async function pollSubscription(subscription: Subscription, options: Poll
     const message = error instanceof Error ? error.message : String(error)
     const backoff = options.backoffMinutes ?? [5, 15, 60]
     const failures = current.failures + 1
-    const wait = backoff[Math.min(backoff.length - 1, failures - 1)] ?? 60
+    let wait = backoff[Math.min(backoff.length - 1, failures - 1)] ?? 60
+    // 数据源报"风控"时，等它的冷却时间，别 5 分钟后又去撞（实测会一直 412）
+    if (/412|风控|-352|-799|频繁/.test(message)) wait = Math.max(wait, 15)
     current.failures = failures
     current.nextCheckAt = now + wait * 60_000
     await options.store.update(current)
