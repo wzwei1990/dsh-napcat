@@ -28,5 +28,11 @@ export interface ToolDeps {
         registry: ProviderRegistry;
         store: SubscriptionStore;
     };
+    /** QQ 语音设置（napcat_send_voice） */
+    voice?: {
+        enabled: boolean;
+        ttsVoice: string;
+        maxChars: number;
+    };
 }
 export declare function registerTools(ctx: Context, conn: OneBotConnection, log: (level: LogLevel, message: string) => void, deps?: ToolDeps): void;

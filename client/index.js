@@ -145,6 +145,21 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
             hint: '只发给 adminUsers 里的人；需要先有评论监听登记。',
           },
           { key: 'replyNotifyIntervalMinutes', label: '回复检查间隔（分钟，最低 30，默认 120）', kind: 'number' },
+
+          { section: '语音（TTS）' },
+          {
+            key: 'voiceEnabled',
+            label: '允许模型发 QQ 语音（napcat_send_voice）',
+            kind: 'boolean',
+            hint: '需要装 dsh-tts，并把它的引擎设成 Edge TTS 或火山方舟；浏览器引擎没有音频文件。',
+          },
+          {
+            key: 'voiceTtsVoice',
+            label: 'QQ 语音单独音色（留空=用 dsh-tts 的音色）',
+            kind: 'text',
+            hint: 'Edge 例：zh-CN-YunxiNeural；火山例：zh_female_vv_uranus_bigtts',
+          },
+          { key: 'voiceMaxChars', label: '单条语音最长字符（默认 200）', kind: 'number' },
           { section: '游戏攻略' },
         {
           key: 'gameWikiEnabled',

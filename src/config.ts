@@ -95,6 +95,12 @@ export interface Config {
   replyNotifyEnabled: boolean
   /** 检查间隔（分钟，低频即可） */
   replyNotifyIntervalMinutes: number
+  /** 允许模型发 QQ 语音（配合 dsh-tts） */
+  voiceEnabled: boolean
+  /** 语音音色覆盖（留空=用 dsh-tts 的配置） */
+  voiceTtsVoice: string
+  /** 单条语音最长字符（超出不合成） */
+  voiceMaxChars: number
   biliPushEnabled: boolean
   /** 推送轮询间隔（分钟） */
   biliPushIntervalMinutes: number
@@ -321,6 +327,9 @@ export const DEFAULTS: Config = {
   subscriptionTypes: 'video,dynamic',
   replyNotifyEnabled: true,
   replyNotifyIntervalMinutes: 120,
+  voiceEnabled: true,
+  voiceTtsVoice: '',
+  voiceMaxChars: 200,
   biliPushEnabled: true,
   biliPushIntervalMinutes: 5,
   biliPushMaxPerPush: 5,

@@ -63,7 +63,12 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
   const subRegistry = new ProviderRegistry({ ctx, log })
   void subStore.load()
   const bridge = new Bridge({
-    subscriptions: { store: subStore, registry: subRegistry }, ctx, config, conn, log })
+    subscriptions: { store: subStore, registry: subRegistry },
+    ctx,
+    config,
+    conn,
+    log,
+  })
   onEvent = event => {
     void bridge.handleEvent(event).catch(error => {
       log('warn', '处理入站事件失败: ' + (error instanceof Error ? error.message : String(error)))
@@ -76,6 +81,11 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
 
   registerTools(ctx, conn, log, {
     subscriptions: { store: subStore, registry: subRegistry },
+    voice: {
+      enabled: config.voiceEnabled,
+      ttsVoice: config.voiceTtsVoice,
+      maxChars: config.voiceMaxChars,
+    },
     keyForSession: sessionId => bridge.keyForSession(sessionId),
     allowedGroups: () => config.groupAllowFrom,
     rememberSpace: (chatKey, spaceId) => bridge.saveMemorySpace(chatKey, spaceId),
