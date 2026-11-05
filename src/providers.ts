@@ -14,6 +14,7 @@ import type { FeedItem, FeedProvider, FeedType } from './subscriptions.js'
 /** dsh-bili 暴露的服务（只依赖这一小部分） */
 export interface BiliServiceLike {
   resolveUp?: (target: string) => Promise<{ mid: number; name: string; fans?: number }>
+  searchUser?: (query: string) => Promise<Array<{ mid: number; name: string; fans?: number }>>
   upVideos?: (mid: number, page?: number, pageSize?: number) => Promise<Array<{ bvid: string; title: string; pubdate: number; durationSec: number; url: string }>>
   upDynamics?: (mid: number, limit?: number) => Promise<Array<{ id: string; type: string; text: string; pubdate: number; url: string; imageCount: number }>>
   search?: (query: string, options?: { page?: number; order?: string; duration?: number }) => Promise<{ hits: Array<{ bvid: string; title: string; up: string; mid: number; play: number; durationSec: number; url: string }>; total: number }>
@@ -42,13 +43,32 @@ export class BiliFeedProvider implements FeedProvider {
 
   async resolve(target: string): Promise<{ key: string; name: string; latestPubdate?: number }> {
     const resolveUp = this.service.resolveUp
-    if (resolveUp === undefined) throw new Error('B 站数据源不可用')
-    const info = await resolveUp(target)
-    const latest = await this.service.upVideos?.(info.mid, 1, 1).catch(() => [])
+    let info: { mid: number; name: string }
+    try {
+      if (resolveUp === undefined) throw new Error('B 站数据源不可用')
+      info = await resolveUp(target)
+    } catch (error) {
+      // 空间接口对未登录/机房 IP 很容易 -352 风控；退回"按名字搜用户"（这个接口宽松得多）
+      const searchUser = this.service.searchUser
+      if (searchUser === undefined) throw error
+      const users = await searchUser(target)
+      const picked = users[0]
+      if (picked === undefined) throw error
+      info = { mid: picked.mid, name: picked.name }
+    }
+    let latestPubdate: number | undefined
+    if (this.service.upVideos !== undefined) {
+      try {
+        const latest = await this.service.upVideos(info.mid, 1, 1)
+        latestPubdate = latest[0]?.pubdate
+      } catch {
+        // 拿不到就留空，由轮询的"首次运行"兜底
+      }
+    }
     return {
       key: String(info.mid),
       name: info.name,
-      ...(latest?.[0]?.pubdate === undefined ? {} : { latestPubdate: latest[0].pubdate }),
+      ...(latestPubdate === undefined ? {} : { latestPubdate }),
     }
   }
 
@@ -125,9 +145,33 @@ export class ProviderRegistry {
   /**
    * 按输入挑 provider：
    *   1) 显式指定 id
-   *   2) 能处理该输入的 provider（多个时取第一个）
-   * 找不到返回 undefined（调用方给出"没有可用数据源"的提示，不点名插件）
+   *   2) canHandle 认得的（链接 / id 这类强特征）
+   *   3) 都不认得时（例如中文名字）：**逐个尝试 resolve**，谁认得算谁的
+   * 这样"订阅半佛仙人"也能落到 B 站，而不是报"没有可用的数据源"。
    */
+  async resolveTarget(target: string, preferred?: string): Promise<{ provider: FeedProvider; resolved: { key: string; name: string; latestPubdate?: number } } | undefined> {
+    const list = this.available()
+    if (preferred !== undefined && preferred !== '') {
+      const only = list.find(provider => provider.id === preferred)
+      if (only === undefined) throw new Error('没有这个数据源：' + preferred)
+      return { provider: only, resolved: await only.resolve(target) }
+    }
+    const strong = list.filter(provider => provider.canHandle(target))
+    const candidates = strong.length > 0 ? strong : list
+    const errors: string[] = []
+    for (const provider of candidates) {
+      try {
+        const resolved = await provider.resolve(target)
+        return { provider, resolved }
+      } catch (error) {
+        errors.push(provider.label + '：' + (error instanceof Error ? error.message : String(error)))
+      }
+    }
+    if (list.length === 0) return undefined
+    throw new Error('没有数据源能识别「' + target + '」' + (errors.length > 0 ? '（' + errors.join('；') + '）' : ''))
+  }
+
+  /** 同步挑选（只按强特征，给不需要解析的场景用） */
   pick(target: string, preferred?: string): FeedProvider | undefined {
     const list = this.available()
     if (preferred !== undefined && preferred !== '') return list.find(provider => provider.id === preferred)

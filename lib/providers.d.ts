@@ -16,6 +16,11 @@ export interface BiliServiceLike {
         name: string;
         fans?: number;
     }>;
+    searchUser?: (query: string) => Promise<Array<{
+        mid: number;
+        name: string;
+        fans?: number;
+    }>>;
     upVideos?: (mid: number, page?: number, pageSize?: number) => Promise<Array<{
         bvid: string;
         title: string;
@@ -78,9 +83,19 @@ export declare class ProviderRegistry {
     /**
      * 按输入挑 provider：
      *   1) 显式指定 id
-     *   2) 能处理该输入的 provider（多个时取第一个）
-     * 找不到返回 undefined（调用方给出"没有可用数据源"的提示，不点名插件）
+     *   2) canHandle 认得的（链接 / id 这类强特征）
+     *   3) 都不认得时（例如中文名字）：**逐个尝试 resolve**，谁认得算谁的
+     * 这样"订阅半佛仙人"也能落到 B 站，而不是报"没有可用的数据源"。
      */
+    resolveTarget(target: string, preferred?: string): Promise<{
+        provider: FeedProvider;
+        resolved: {
+            key: string;
+            name: string;
+            latestPubdate?: number;
+        };
+    } | undefined>;
+    /** 同步挑选（只按强特征，给不需要解析的场景用） */
     pick(target: string, preferred?: string): FeedProvider | undefined;
     get(id: string): FeedProvider | undefined;
     labels(): string;

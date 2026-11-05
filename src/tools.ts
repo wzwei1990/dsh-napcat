@@ -475,12 +475,12 @@ export function registerTools(
         try {
           const target = resolveChat(input.chat_id, exec)
           const chatKey = target.kind + ':' + target.id
-          const provider = registry.pick(input.target)
-          if (provider === undefined) {
-            return '没有可用的数据源：当前没有任何已安装的插件能提供这个平台的内容。'
-          }
           await store.load()
-          const resolved = await provider.resolve(input.target)
+          const matched = await registry.resolveTarget(input.target)
+          if (matched === undefined) {
+            return '没有可用的数据源：当前没有任何插件能提供订阅数据（搜索/解析类功能不受影响）。'
+          }
+          const { provider, resolved } = matched
           const types = (input.types ?? 'video,dynamic')
             .split(/[,，]/)
             .map(item => item.trim())
