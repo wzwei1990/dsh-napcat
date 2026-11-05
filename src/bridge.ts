@@ -32,6 +32,7 @@ import { MemoryStore } from './memory.js'
 import { GameWiki } from './gamewiki.js'
 import { BiliLink } from './bililink.js'
 import { BiliPusher, formatPush } from './bilipush.js'
+import { workspaceDirFor } from './workspace.js'
 import { SubscriptionStore, pollSubscription } from './subscriptions.js'
 import { ProviderRegistry } from './providers.js'
 import { ImageCache } from './imagecache.js'
@@ -1726,9 +1727,8 @@ export class Bridge {
     const cwd = await this.cwdFor(ref)
     const suffix = this.sessionSuffixes.get(ref.key)
     // 把 cwd 编进会话 id：改过 workspacePath/开关后自然换新会话，不会 resume 到旧 cwd 的半死会话
-    const cwdTag = this.opts.config.perChatWorkspace && this.opts.config.workspacePath.trim() !== ''
-      ? '-w' + shortHash(cwd)
-      : ''
+    const needsOwnDir = ref.kind === 'group' || this.opts.config.perChatWorkspace
+    const cwdTag = needsOwnDir ? '-w' + shortHash(cwd) : ''
     let sessionId = makeSessionId(
       sessionIdForChat(ref.key) + cwdTag + (suffix === undefined ? '' : '-' + suffix),
     )
@@ -1976,13 +1976,29 @@ export class Bridge {
       this.opts.log('warn', '挂工作区失败: ' + describe(error))
     }
   }
-  /** 会话工作目录：开了 perChatWorkspace 时每个 QQ 会话一个子目录（侧边栏按工作区归拢）。 */
+  /**
+   * 会话工作目录（决定侧边栏归到哪个工作区）。
+   *
+   * 修复 2026-11-05：原来 `workspacePath` 留空时直接返回 process.cwd()，
+   * 导致"每个会话用独立子目录"这个开关被跳过 → 所有群共用一个目录，
+   * workspaceRegistry 按目录匹配时把不同群的会话全塞进第一个群的工作区格子。
+   *
+   * 现在的规则：
+   *   - 群聊：**永远**一个群一个子目录（共用目录是错的，工作区没法按群分开）
+   *   - 私聊：按 perChatWorkspace 决定
+   *   - workspacePath 留空时，以宿主 cwd 为基准目录
+   */
   private async cwdFor(ref: ChatRef): Promise<string> {
-    const base = this.opts.config.workspacePath.trim()
-    if (base === '') return process.cwd()
-    if (!this.opts.config.perChatWorkspace) return base
-    const safe = ref.key.replace(/[^A-Za-z0-9._-]+/g, '-')
-    const dir = join(base, 'napcat', safe)
+    const configured = this.opts.config.workspacePath.trim()
+    const base = configured === '' ? process.cwd() : normalizePath(configured)
+    const dir = workspaceDirFor({
+      base,
+      fallbackBase: process.cwd(),
+      chatKey: ref.key,
+      kind: ref.kind,
+      perChatWorkspace: this.opts.config.perChatWorkspace,
+    })
+    if (dir === base) return base
     try {
       await mkdir(dir, { recursive: true })
     } catch (error) {

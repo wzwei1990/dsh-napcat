@@ -76,7 +76,7 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'warmupImageLimit', label: '单次预热最多下载几张历史图片（默认 30）', kind: 'number' },
         { section: '会话与模型' },
         { key: 'workspacePath', label: '会话工作区路径（留空=宿主 cwd）', kind: 'text' },
-        { key: 'perChatWorkspace', label: '每个会话用独立子目录（workspacePath/napcat/<群号或QQ>）', kind: 'boolean' },
+        { key: 'perChatWorkspace', label: '每个会话用独立子目录（群聊始终独立；私聊按此开关，目录为 workspacePath/napcat/<群号或QQ>）', kind: 'boolean' },
         { key: 'personaOverrides', label: '群/人性格（每行 group:<群号>=<人设> 或 private:<QQ>=<人设>）', kind: 'textarea', placeholder: 'group:123456=你是群宠小灯，语气活泼\nprivate:10001=你是我的私人助理，正式一点' },
         { key: 'agentPreset', label: 'Agent 预设（留空=宿主默认）', kind: 'text' },
         { key: 'provider', label: '模型 provider（留空=宿主默认）', kind: 'text' },

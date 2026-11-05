@@ -231,7 +231,18 @@ export declare class Bridge {
         };
     } | undefined): string;
     private attachToWorkspace;
-    /** 会话工作目录：开了 perChatWorkspace 时每个 QQ 会话一个子目录（侧边栏按工作区归拢）。 */
+    /**
+     * 会话工作目录（决定侧边栏归到哪个工作区）。
+     *
+     * 修复 2026-11-05：原来 `workspacePath` 留空时直接返回 process.cwd()，
+     * 导致"每个会话用独立子目录"这个开关被跳过 → 所有群共用一个目录，
+     * workspaceRegistry 按目录匹配时把不同群的会话全塞进第一个群的工作区格子。
+     *
+     * 现在的规则：
+     *   - 群聊：**永远**一个群一个子目录（共用目录是错的，工作区没法按群分开）
+     *   - 私聊：按 perChatWorkspace 决定
+     *   - workspacePath 留空时，以宿主 cwd 为基准目录
+     */
     private cwdFor;
     private dispatch;
     /**

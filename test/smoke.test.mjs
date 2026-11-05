@@ -1085,3 +1085,26 @@ test('订阅（provider 无关）：upsert 合并类型/群、pending 按群过�
   assert.equal(store.pending('napcat:group:2', 10, 'group:2').length, 1)
   await rm(dir, { recursive: true, force: true })
 })
+test('工作区目录：workspacePath 留空时群聊也必须一group一目录（否则会话混进同一格）', async () => {
+  const { workspaceDirFor } = await import('../lib/workspace.js')
+  const fallback = process.cwd()
+  const a = workspaceDirFor({ base: '', fallbackBase: fallback, chatKey: 'group:660610917', kind: 'group', perChatWorkspace: true })
+  const b = workspaceDirFor({ base: '', fallbackBase: fallback, chatKey: 'group:1103089802', kind: 'group', perChatWorkspace: true })
+  assert.notEqual(a, b, '不同群不能共用一个工作区目录')
+  assert.ok(a.includes('napcat'), '应落在 napcat 子目录下')
+  assert.ok(a.includes('group-660610917'))
+
+  // 即使 perChatWorkspace 关着，群聊也要独立
+  const c1 = workspaceDirFor({ base: '', fallbackBase: fallback, chatKey: 'group:1', kind: 'group', perChatWorkspace: false })
+  const c2 = workspaceDirFor({ base: '', fallbackBase: fallback, chatKey: 'group:2', kind: 'group', perChatWorkspace: false })
+  assert.notEqual(c1, c2, 'perChatWorkspace=false 时群聊仍必须分开')
+
+  // 私聊在关闭时退回 base
+  const priv = workspaceDirFor({ base: '', fallbackBase: fallback, chatKey: 'private:123', kind: 'private', perChatWorkspace: false })
+  assert.equal(priv, fallback, '私聊关闭时用共享目录')
+
+  // 配置了 workspacePath 时基于它建
+  const withBase = workspaceDirFor({ base: 'E:/dsnworkspace', fallbackBase: fallback, chatKey: 'group:9', kind: 'group', perChatWorkspace: true })
+  assert.ok(withBase.startsWith('E:/dsnworkspace'), '应基于配置路径')
+  assert.ok(withBase.includes('group-9'))
+})
