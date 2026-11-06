@@ -98,8 +98,10 @@ export interface Config {
     voiceTtsVoice: string;
     /** 单条语音最长字符（超出不合成） */
     voiceMaxChars: number;
-    /** 自动配语音的时机：mirror=对方发语音时；always=每条都配（不发语音用上面的 voiceEnabled 关掉） */
-    voiceReplyMode: 'mirror' | 'always';
+    /** 每条回复都发语音 */
+    voiceAlways: boolean;
+    /** 对方发语音时，我的回复也用语音 */
+    voiceMirror: boolean;
     /** 只发语音不发文字 */
     voiceReplaceText: boolean;
     /** 群语音触发：off=不触发；keywords=转写命中触发词；always=每条语音都触发（QQ 语音不能带 @） */

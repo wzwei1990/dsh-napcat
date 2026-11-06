@@ -101,8 +101,10 @@ export interface Config {
   voiceTtsVoice: string
   /** 单条语音最长字符（超出不合成） */
   voiceMaxChars: number
-  /** 自动配语音的时机：mirror=对方发语音时；always=每条都配（不发语音用上面的 voiceEnabled 关掉） */
-  voiceReplyMode: 'mirror' | 'always'
+  /** 每条回复都发语音 */
+  voiceAlways: boolean
+  /** 对方发语音时，我的回复也用语音 */
+  voiceMirror: boolean
   /** 只发语音不发文字 */
   voiceReplaceText: boolean
   /** 群语音触发：off=不触发；keywords=转写命中触发词；always=每条语音都触发（QQ 语音不能带 @） */
@@ -246,21 +248,23 @@ export const Config: Z<Config> = z.object({
   // 注意：这几个字段必须在 zod schema 里且带 .volatile()，否则设置页保存会被宿主拒绝
   // （settings/rejected: Config field "xxx" is not volatile）
   voiceEnabled: z.boolean().default(true)
-    .description('允许模型发 QQ 语音（napcat_send_voice）').volatile(),
+    .description('1. 语音总开关：允许我发 QQ 语音（关=完全不发，也不影响识别语音）').volatile(),
   voiceTtsVoice: z.string().default('')
-    .description('QQ 语音单独音色（留空=用 dsh-tts 的音色）').volatile(),
+    .description('2. 发语音用哪个音色（留空=跟 dsh-tts 设置里的音色一致）').volatile(),
   voiceMaxChars: z.natural().min(20).max(2000).default(200)
-    .description('单条语音最长字符（超出截断）').volatile(),
-  voiceReplyMode: z.union(['mirror', 'always'] as const).default('mirror')
-    .description('自动配语音的时机：mirror=对方发语音时自动配一条；always=每条回复都自动配（不发语音就把上面的开关关掉）').volatile(),
+    .description('3. 一条语音最多念多少字（超出截断）').volatile(),
+  voiceAlways: z.boolean().default(false)
+    .description('4. 每次回复都发语音').volatile(),
+  voiceMirror: z.boolean().default(true)
+    .description('5. 对方发语音时，我用语音回').volatile(),
   voiceReplaceText: z.boolean().default(false)
-    .description('只发语音不发文字（语音失败自动退回文字）').volatile(),
+    .description('6. 只发语音、不发文字（语音失败自动改发文字）').volatile(),
   voiceTriggerMode: z.union(['off', 'keywords', 'always'] as const).default('off')
-    .description('群语音触发：off=不触发；keywords=转写命中触发词才触发；always=每条语音都触发（QQ 语音不能带 @）').volatile(),
+    .description('7. 群里发语音怎么叫到我：off=不理；keywords=说了触发词才回；always=任何语音都接').volatile(),
   voiceTriggerKeywords: z.string().default('')
-    .description('语音触发词（逗号分隔，留空=用 triggerKeywords）').volatile(),
+    .description('8. 语音里要出现哪些词才算叫我（逗号分隔，留空=用全局 triggerKeywords）').volatile(),
   voiceTestChatId: z.string().default('')
-    .description('设置页「测试发语音」的目标会话（private:QQ 或 group:群号）').volatile(),
+    .description('9. 测试用：测试语音发到哪个会话（private:QQ号 或 group:群号）').volatile(),
   biliPushEnabled: z.boolean().default(true)
     .description('接收 B 站 UP 更新推送（dsh-bili 订阅 → 群）').volatile(),
   biliPushIntervalMinutes: z.natural().default(5)
@@ -359,7 +363,8 @@ export const DEFAULTS: Config = {
   voiceEnabled: true,
   voiceTtsVoice: '',
   voiceMaxChars: 200,
-  voiceReplyMode: 'mirror',
+  voiceAlways: false,
+  voiceMirror: true,
   voiceReplaceText: false,
   voiceTriggerMode: 'off',
   voiceTriggerKeywords: '',

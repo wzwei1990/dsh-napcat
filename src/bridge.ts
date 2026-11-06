@@ -1815,7 +1815,7 @@ export class Bridge {
           } else {
             notes.push('[语音: ' + voice.path + ']（' + (voice.error === undefined ? '没识别出内容' : '识别失败：' + voice.error) + '）')
           }
-          if (this.opts.config.voiceReplyMode === 'mirror') chat.replyWithVoice = true
+          if (this.opts.config.voiceMirror) chat.replyWithVoice = true
         } else if (seg.type === 'video') {
           const isHttp = (v: unknown): v is string => typeof v === 'string' && /^https?:\/\//i.test(v)
           const fileName = nameFromRef(fileRef, 'video.mp4')
@@ -2516,10 +2516,9 @@ export class Bridge {
   }
 
   private async sendText(chat: ChatState, text: string): Promise<void> {
-    // 自动配语音的时机：always=每条都配；其余（含老配置里的 'off'）=只在对方发语音时配
-    const mode = this.opts.config.voiceReplyMode === 'always' ? 'always' : 'mirror'
+    // 两个独立开关：每次都发 / 只在对方发语音时发
     const wantVoice = this.opts.config.voiceEnabled && text.trim() !== ''
-      && (mode === 'always' || (mode === 'mirror' && chat.replyWithVoice === true))
+      && (this.opts.config.voiceAlways || (this.opts.config.voiceMirror && chat.replyWithVoice === true))
     chat.replyWithVoice = false
     // 只发语音：先发语音，成功就不再发文字；失败继续往下发文字
     if (wantVoice && this.opts.config.voiceReplaceText) {
