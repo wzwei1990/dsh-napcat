@@ -84,7 +84,6 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
     voice: {
       enabled: config.voiceEnabled,
       ttsVoice: config.voiceTtsVoice,
-      maxChars: config.voiceMaxChars,
     },
     keyForSession: sessionId => bridge.keyForSession(sessionId),
     allowedGroups: () => config.groupAllowFrom,

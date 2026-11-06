@@ -63,7 +63,7 @@ export interface ToolDeps {
     store: SubscriptionStore
   }
   /** QQ 语音设置（napcat_send_voice） */
-  voice?: { enabled: boolean; ttsVoice: string; maxChars: number }
+  voice?: { enabled: boolean; ttsVoice: string }
 }
 
 export function registerTools(
@@ -72,7 +72,7 @@ export function registerTools(
   log: (level: LogLevel, message: string) => void,
   deps: ToolDeps = {},
 ): void {
-  const voice = deps.voice ?? { enabled: true, ttsVoice: '', maxChars: 200 }
+  const voice = deps.voice ?? { enabled: true, ttsVoice: '' }
   const keyForSession = deps.keyForSession
   const maxImageBytes = deps.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES
   const maxFileBytes = deps.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES
@@ -596,9 +596,6 @@ export function registerTools(
       if (filePath === '') {
         const text = typeof input.text === 'string' ? input.text.trim() : ''
         if (text === '') return '要给 text（说的话）或 path（音频文件）。'
-        if (text.length > voice.maxChars) {
-          return '语音太长（' + String(text.length) + ' 字 > 上限 ' + String(voice.maxChars) + ' 字），说短一点。'
-        }
         const tts = (ctx as unknown as { get?: (name: string) => unknown }).get?.('dshTts') as {
           synthesize?: (text: string, options?: { source?: string }) => Promise<{ path: string; provider: string }>
         } | undefined

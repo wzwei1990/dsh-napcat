@@ -160,12 +160,6 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
             hint: 'Edge 例：zh-CN-XiaoxiaoNeural；火山例：zh_female_vv_uranus_bigtts。\n一般不填就行，改 dsh-tts 那里最省事。',
           },
           {
-            key: 'voiceMaxChars',
-            label: '3. 一条语音最多念多少字（超出截断，默认 200）',
-            kind: 'number',
-            hint: '太长会念很久，200 字大约 40 秒。',
-          },
-          {
             key: 'voiceAlways',
             label: '4. 每次回复都发语音（不管对方发的是文字还是语音）',
             kind: 'boolean',

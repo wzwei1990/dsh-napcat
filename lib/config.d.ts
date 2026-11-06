@@ -96,8 +96,6 @@ export interface Config {
     voiceEnabled: boolean;
     /** 语音音色覆盖（留空=用 dsh-tts 的配置） */
     voiceTtsVoice: string;
-    /** 单条语音最长字符（超出不合成） */
-    voiceMaxChars: number;
     /** 每条回复都发语音 */
     voiceAlways: boolean;
     /** 对方发语音时，我的回复也用语音 */

@@ -99,8 +99,6 @@ export interface Config {
   voiceEnabled: boolean
   /** 语音音色覆盖（留空=用 dsh-tts 的配置） */
   voiceTtsVoice: string
-  /** 单条语音最长字符（超出不合成） */
-  voiceMaxChars: number
   /** 每条回复都发语音 */
   voiceAlways: boolean
   /** 对方发语音时，我的回复也用语音 */
@@ -251,8 +249,6 @@ export const Config: Z<Config> = z.object({
     .description('1. 语音总开关：允许我发 QQ 语音（关=完全不发，也不影响识别语音）').volatile(),
   voiceTtsVoice: z.string().default('')
     .description('2. 发语音用哪个音色（留空=跟 dsh-tts 设置里的音色一致）').volatile(),
-  voiceMaxChars: z.natural().min(20).max(2000).default(200)
-    .description('3. 一条语音最多念多少字（超出截断）').volatile(),
   voiceAlways: z.boolean().default(false)
     .description('4. 每次回复都发语音').volatile(),
   voiceMirror: z.boolean().default(true)
@@ -362,7 +358,6 @@ export const DEFAULTS: Config = {
   replyNotifyIntervalMinutes: 120,
   voiceEnabled: true,
   voiceTtsVoice: '',
-  voiceMaxChars: 200,
   voiceAlways: false,
   voiceMirror: true,
   voiceReplaceText: false,
