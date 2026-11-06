@@ -101,17 +101,16 @@ export interface Config {
   voiceTtsVoice: string
   /** 单条语音最长字符（超出不合成） */
   voiceMaxChars: number
-  /** 回复语音策略：off / mirror / always */
-  voiceReplyMode: 'off' | 'mirror' | 'always'
+  /** 自动配语音的时机：mirror=对方发语音时；always=每条都配（不发语音用上面的 voiceEnabled 关掉） */
+  voiceReplyMode: 'mirror' | 'always'
+  /** 只发语音不发文字 */
+  voiceReplaceText: boolean
+  /** 群语音触发：off=不触发；keywords=转写命中触发词；always=每条语音都触发（QQ 语音不能带 @） */
+  voiceTriggerMode: 'off' | 'keywords' | 'always'
+  /** 语音触发词（逗号分隔，留空=用 triggerKeywords） */
+  voiceTriggerKeywords: string
   /** 设置页「测试发语音」的目标会话 */
   voiceTestChatId: string
-  /**
-   * 群语音怎么触发机器人（QQ 语音不能带 @，所以必须单独设计）：
-   * off=不触发（默认）| keywords=转写后命中触发词/机器人名才触发 | always=任何语音都触发（费 ASR 与模型额度）
-   */
-  voiceTriggerMode: 'off' | 'keywords' | 'always'
-  /** 语音触发关键词（逗号分隔；留空=用 triggerKeywords） */
-  voiceTriggerKeywords: string
   biliPushEnabled: boolean
   /** 推送轮询间隔（分钟） */
   biliPushIntervalMinutes: number
@@ -243,6 +242,25 @@ export const Config: Z<Config> = z.object({
     .description('订阅数量上限').volatile(),
   subscriptionTypes: z.string().default('video,dynamic')
     .description('默认订阅类型：video,dynamic').volatile(),
+  // ── 语音（dsh-tts 联动）──
+  // 注意：这几个字段必须在 zod schema 里且带 .volatile()，否则设置页保存会被宿主拒绝
+  // （settings/rejected: Config field "xxx" is not volatile）
+  voiceEnabled: z.boolean().default(true)
+    .description('允许模型发 QQ 语音（napcat_send_voice）').volatile(),
+  voiceTtsVoice: z.string().default('')
+    .description('QQ 语音单独音色（留空=用 dsh-tts 的音色）').volatile(),
+  voiceMaxChars: z.natural().min(20).max(2000).default(200)
+    .description('单条语音最长字符（超出截断）').volatile(),
+  voiceReplyMode: z.union(['mirror', 'always'] as const).default('mirror')
+    .description('自动配语音的时机：mirror=对方发语音时自动配一条；always=每条回复都自动配（不发语音就把上面的开关关掉）').volatile(),
+  voiceReplaceText: z.boolean().default(false)
+    .description('只发语音不发文字（语音失败自动退回文字）').volatile(),
+  voiceTriggerMode: z.union(['off', 'keywords', 'always'] as const).default('off')
+    .description('群语音触发：off=不触发；keywords=转写命中触发词才触发；always=每条语音都触发（QQ 语音不能带 @）').volatile(),
+  voiceTriggerKeywords: z.string().default('')
+    .description('语音触发词（逗号分隔，留空=用 triggerKeywords）').volatile(),
+  voiceTestChatId: z.string().default('')
+    .description('设置页「测试发语音」的目标会话（private:QQ 或 group:群号）').volatile(),
   biliPushEnabled: z.boolean().default(true)
     .description('接收 B 站 UP 更新推送（dsh-bili 订阅 → 群）').volatile(),
   biliPushIntervalMinutes: z.natural().default(5)
@@ -341,7 +359,8 @@ export const DEFAULTS: Config = {
   voiceEnabled: true,
   voiceTtsVoice: '',
   voiceMaxChars: 200,
-  voiceReplyMode: 'off',
+  voiceReplyMode: 'mirror',
+  voiceReplaceText: false,
   voiceTriggerMode: 'off',
   voiceTriggerKeywords: '',
   voiceTestChatId: '',

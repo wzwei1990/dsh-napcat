@@ -18,7 +18,7 @@ import type { ObEvent } from './types.js';
 /** 投递后多久没收到 turn/start 就判定会话失效。 */
 interface ChatState {
     ref: ChatRef;
-    /** 本轮是否额外回一条语音（voiceReplyMode 决定；sendText 发完清掉） */
+    /** 本轮是否额外回一条语音（mirror 模式用） */
     replyWithVoice?: boolean;
     agent: Agent;
     dispose: () => Promise<void>;
@@ -258,6 +258,10 @@ export declare class Bridge {
      *   keywords → 转写文本命中触发词（voiceTriggerKeywords，留空用 triggerKeywords）才触发
      *   always   → 任何语音都触发（费 ASR + 模型额度）
      */
+    /**
+     * 群语音算不算"叫了机器人"（QQ 语音不能带 @）：
+     *   off=不触发 | keywords=转写命中触发词才触发 | always=每条语音都触发
+     */
     private voiceTriggered;
     /** 语音触发词：voiceTriggerKeywords，留空则用 triggerKeywords */
     private voiceTriggerWords;
@@ -330,7 +334,6 @@ export declare class Bridge {
     private sendText;
     /**
      * 设置页「发一条测试语音」用：给指定会话（或最近有对话的会话）发一条语音。
-     * 返回结构化结果，路由层直接回 JSON。
      */
     testVoice(input?: {
         chatId?: string;

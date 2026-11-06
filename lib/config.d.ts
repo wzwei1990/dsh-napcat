@@ -98,17 +98,16 @@ export interface Config {
     voiceTtsVoice: string;
     /** 单条语音最长字符（超出不合成） */
     voiceMaxChars: number;
-    /** 回复语音策略：off / mirror / always */
-    voiceReplyMode: 'off' | 'mirror' | 'always';
+    /** 自动配语音的时机：mirror=对方发语音时；always=每条都配（不发语音用上面的 voiceEnabled 关掉） */
+    voiceReplyMode: 'mirror' | 'always';
+    /** 只发语音不发文字 */
+    voiceReplaceText: boolean;
+    /** 群语音触发：off=不触发；keywords=转写命中触发词；always=每条语音都触发（QQ 语音不能带 @） */
+    voiceTriggerMode: 'off' | 'keywords' | 'always';
+    /** 语音触发词（逗号分隔，留空=用 triggerKeywords） */
+    voiceTriggerKeywords: string;
     /** 设置页「测试发语音」的目标会话 */
     voiceTestChatId: string;
-    /**
-     * 群语音怎么触发机器人（QQ 语音不能带 @，所以必须单独设计）：
-     * off=不触发（默认）| keywords=转写后命中触发词/机器人名才触发 | always=任何语音都触发（费 ASR 与模型额度）
-     */
-    voiceTriggerMode: 'off' | 'keywords' | 'always';
-    /** 语音触发关键词（逗号分隔；留空=用 triggerKeywords） */
-    voiceTriggerKeywords: string;
     biliPushEnabled: boolean;
     /** 推送轮询间隔（分钟） */
     biliPushIntervalMinutes: number;

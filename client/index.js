@@ -151,7 +151,7 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
             key: 'voiceEnabled',
             label: '允许模型发 QQ 语音（napcat_send_voice）',
             kind: 'boolean',
-            hint: '需要装 dsh-tts，并把它的引擎设成 Edge TTS 或火山方舟；浏览器引擎没有音频文件。',
+            hint: '开=回复直接发语音（合成/发送失败会自动改发文字，不会让你什么都收不到）；关=只发文字，模型也不会主动发语音。群里发语音时，要说出触发词（triggerKeywords，如「小灯」）才会回；私聊直接回。',
           },
           {
             key: 'voiceTtsVoice',
@@ -161,6 +161,22 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
           },
           { key: 'voiceMaxChars', label: '单条语音最长字符（默认 200）', kind: 'number' },
           {
+            key: 'voiceReplyMode',
+            label: '插件自动配语音（不影响模型自己发）',
+            kind: 'select',
+            options: [
+              ['mirror', 'mirror · 对方发语音时自动配一条（默认）'],
+              ['always', 'always · 每条回复都自动配一条'],
+            ],
+            hint: '不发语音就把上面那个开关关掉；这里只选"什么时候自动配语音"。',
+          },
+          {
+            key: 'voiceReplaceText',
+            label: '只发语音，不发文字（语音失败自动退回文字）',
+            kind: 'boolean',
+            hint: '不勾=文字一条 + 语音一条；勾上=只发语音，失败才发文字。',
+          },
+          {
             key: 'voiceTriggerMode',
             label: '群语音怎么触发我（QQ 语音不能带 @）',
             kind: 'select',
@@ -169,24 +185,13 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
               ['keywords', 'keywords · 转写里出现触发词才触发'],
               ['always', 'always · 任何语音都触发（费额度）'],
             ],
-            hint: 'keywords 会把每条语音都转写一次（有识别费用），命中触发词才回；always 是每条都回。私聊不受此限制。',
+            hint: '私聊不受此限制，发语音直接回。',
           },
           {
             key: 'voiceTriggerKeywords',
             label: '语音触发词（逗号分隔；留空=用 triggerKeywords）',
             kind: 'text',
             hint: '例：小灯,灯灯。语音转写里出现任一个就当我被叫到。',
-          },
-          {
-            key: 'voiceReplyMode',
-            label: '回复语音策略',
-            kind: 'select',
-            options: [
-              ['off', 'off · 只用文字（默认）'],
-              ['mirror', 'mirror · 对方发语音时我也用语音回'],
-              ['always', 'always · 每条回复都配一条语音'],
-            ],
-            hint: 'always 比较吵，建议先试 mirror。',
           },
           {
             key: 'voiceTestChatId',
