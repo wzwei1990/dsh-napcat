@@ -106,5 +106,21 @@ export declare class BiliLink {
     constructor(options: BiliContextOptions);
     private service;
     /** 消息里有 B 站链接就返回注入块；失败/无服务静默返回 undefined */
-    blockFor(text: string): Promise<string | undefined>;
+    /** 最近解析过的链接（按会话缓存，解决"没 @ 我时本来就没人解析"的问题） */
+    private readonly recent;
+    private readonly parsing;
+    /**
+     * 观察层用：看到 B 站链接就**后台**解析一次（只取弹幕/标题，不做分镜），
+     * 记进 recent 缓存。这样之后被 @ 或主动发言时，能接上"刚才那个视频"。
+     * 每个会话 2 分钟内最多一次，失败静默。
+     */
+    note(chatKey: string, text: string): Promise<void>;
+    /** 该会话最近解析过的视频（10 分钟内有效） */
+    recentOf(chatKey: string): {
+        link: string;
+        title: string;
+    } | undefined;
+    blockFor(text: string, options?: {
+        timeoutMs?: number;
+    }): Promise<string | undefined>;
 }

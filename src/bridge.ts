@@ -30,7 +30,7 @@ import type { LogLevel, OneBotConnection } from './onebot.js'
 import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, stripKeyword, titleFrom, toText } from './text.js'
 import { MemoryStore } from './memory.js'
 import { GameWiki } from './gamewiki.js'
-import { BiliLink } from './bililink.js'
+import { BiliLink, extractBiliLink } from './bililink.js'
 import { BiliPusher, formatPush } from './bilipush.js'
 import { workspaceDirFor } from './workspace.js'
 import { SubscriptionStore, pollSubscription } from './subscriptions.js'
@@ -52,6 +52,8 @@ type HostContext = Context & { agents: AgentRegistry }
 
 interface ChatState {
   ref: ChatRef
+  /** 本轮是否额外回一条语音（voiceReplyMode 决定；sendText 发完清掉） */
+  replyWithVoice?: boolean
   agent: Agent
   dispose: () => Promise<void>
   /** 本轮已产生的助手文本（turn/end 时一次性发出）。 */
@@ -107,6 +109,8 @@ export class Bridge {
   /** 上次预热尝试时间（避免频繁重试）。 */
   private readonly warmAttempts = new Map<string, number>()
   private readonly chats = new Map<string, ChatState>()
+  /** 语音识别缓存：fileRef → { path, text }（触发判定与入站处理共用，避免识别两次） */
+  private readonly voiceCaches = new Map<string, { path: string; text: string }>()
   private readonly bySession = new Map<string, string>()
   /** 归档/失效后换用新会话 id 的后缀（下次建会话时带上）。 */
   private readonly sessionSuffixes = new Map<string, string>()
@@ -309,8 +313,38 @@ export class Bridge {
         this.opts.log('debug', '图片缓存失败（已跳过）: ' + (error instanceof Error ? error.message : String(error)))
       }
     }
-    if (saved.length === 0) return rawText
-    return rawText.replace(/\[图片\]/g, '') + ' [图片:' + saved.join(',') + ']'
+    // 视频/语音在观察层不下载（群里一刷就是一串，下载太贵），但把时长/大小带上，
+    // 这样模型至少知道"有人发了一段 12 秒的视频 / 3 秒的语音"，而不是光看到占位符。
+    const describeMedia = (seg: { type?: string; data?: unknown }): string => {
+      const data = (seg.data ?? {}) as { duration?: unknown; file_size?: unknown; file?: unknown }
+      const seconds = Number(data.duration ?? 0)
+      const size = Number(data.file_size ?? 0)
+      const suffix = [
+        seconds > 0 ? Math.round(seconds) + '秒' : '',
+        size > 0 ? Math.round(size / 1024) + 'KB' : '',
+        typeof data.file === 'string' && data.file !== '' ? '可点开' : '',
+      ].filter(part => part !== '').join(' ')
+      return suffix === '' ? '' : '(' + suffix + ')'
+    }
+    let text = rawText
+    const videos = segments.filter(seg => seg.type === 'video')
+    if (videos.length > 0) {
+      let replaced = false
+      for (const seg of videos.slice(0, 2)) {
+        text = text.replace('[视频]', replaced ? '[视频' + describeMedia(seg) + ']' : '[视频' + describeMedia(seg) + ']')
+        replaced = true
+      }
+    }
+    const records = segments.filter(seg => seg.type === 'record')
+    if (records.length > 0) {
+      let replaced = false
+      for (const seg of records.slice(0, 2)) {
+        text = text.replace('[语音]', '[语音' + describeMedia(seg) + ']')
+        replaced = true
+      }
+    }
+    if (saved.length === 0) return text
+    return text.replace(/\[图片\]/g, '') + ' [图片:' + saved.join(',') + ']'
   }
 
   // ── 主动发言（伪人模式）──
@@ -1389,6 +1423,10 @@ export class Bridge {
     const senderNick = card !== '' ? card : nick !== '' ? nick : userId
     // 用消息本身的时间（秒级 time × 1000），不要用"处理时刻"——否则和预热拉回的历史差几秒，去重对不上
     const messageAt = typeof msg.time === 'number' && msg.time > 0 ? msg.time * 1000 : undefined
+    // B 站链接：不管有没有 @ 我，都后台解析一次（后面被叫到时能接上"刚才那个视频"）
+    if (this.opts.config.biliEnabled) {
+      void this.biliLink.note(ref.key, rawText).catch(() => undefined)
+    }
     if (this.opts.config.memoryEnabled) {
       if (this.opts.config.imageCache === 'all') {
         // 图片要落盘并写进记录（异步，不阻塞本条消息处理）
@@ -1425,7 +1463,10 @@ export class Bridge {
       } else {
         const recent = this.chats.get(ref.key)?.recentReplyIds ?? []
         const hit = mentions(msg.message, selfId) || repliesToAny(msg.message, recent) || keyword !== undefined
-        if (!hit) {
+        // QQ 语音没法带 @：按配置的语音触发模式判断它算不算"叫了机器人"
+        const voiceHit = hit ? false : await this.voiceTriggered(msg, ref)
+        if (!hit && voiceHit) this.opts.log('info', '语音触发命中（' + this.opts.config.voiceTriggerMode + '）: ' + ref.key)
+        if (!hit && !voiceHit) {
           this.opts.log('debug', '群消息未 @ 机器人且没命中关键字（已记入缓冲）: ' + ref.key)
           // 没叫它 → 看看要不要主动插一句（判定在 proactive 里）
           if (this.opts.config.proactiveEnabled) void this.maybeInterject(ref)
@@ -1534,11 +1575,19 @@ export class Bridge {
       ? '[本轮消息主要是图片/文件] 先按上面的说明用 read_image 或读文件确认内容，再针对它回应；不要凭文字猜测画面。'
       : ''
     const linkHint = this.linkHintOf([...(await this.mem.readRecent(ref.key, 4)), rawText])
+    // 当前这条不是链接，但群里刚发过 B 站视频 → 告诉模型"刚才那个视频"是什么，能接上话
+    const recentBili = this.opts.config.biliEnabled && extractBiliLink(textWithoutImageMarkers) === undefined
+      ? this.biliLink.recentOf(ref.key)
+      : undefined
+    const recentBiliHint = recentBili === undefined
+      ? ''
+      : '【群里刚发过 B 站视频】' + recentBili.title + '（' + recentBili.link + '）\n'
+        + '- 如果这几句在聊它，直接用你知道的（弹幕/标题）接话；需要更多细节就 bili_read 那个链接。\n'
     // 词表召回：命中就把"可能是哪个游戏 + 可查工具"交给模型，由它决定查不查
     const gameHint = await this.gameWiki.hintFor(textWithoutImageMarkers)
     // B 站链接：解析弹幕/字幕，让模型"看过"再接话
     const biliHint = await this.biliLink.blockFor(textWithoutImageMarkers)
-    const text = [biliHint ?? '', gameHint ?? '', memoryBlock, visualHint, linkHint, textWithoutImageMarkers, ...media.notes].filter(part => part !== '').join('\n\n')
+    const text = [biliHint ?? '', recentBiliHint, gameHint ?? '', memoryBlock, visualHint, linkHint, textWithoutImageMarkers, ...media.notes].filter(part => part !== '').join('\n\n')
     if (text.trim() === '') {
       this.opts.log('debug', '空消息（无文本也没有可下载的媒体），跳过: ' + ref.key)
       return
@@ -1624,8 +1673,90 @@ export class Bridge {
   }
 
   /** 把消息里的图片/文件下载到会话收件箱，返回给模型的文本注释（[图片: path]）。 */
+  /**
+   * 群语音算不算"叫了机器人"（QQ 语音不能带 @，只能按策略判断）：
+   *   off      → 永不触发
+   *   keywords → 转写文本命中触发词（voiceTriggerKeywords，留空用 triggerKeywords）才触发
+   *   always   → 任何语音都触发（费 ASR + 模型额度）
+   */
+  private async voiceTriggered(msg: ObMessageEvent, ref: ChatRef): Promise<boolean> {
+    const mode = this.opts.config.voiceTriggerMode
+    if (mode === 'off') return false
+    const records = segmentsOf(msg.message).filter(seg => seg.type === 'record')
+    if (records.length === 0) return false
+    if (mode === 'always') return true
+    const words = this.voiceTriggerWords()
+    if (words.length === 0) return false
+    const fileRef = String((records[0]?.data as { file?: unknown } | undefined)?.file ?? '')
+    if (fileRef === '') return false
+    let cwd: string | undefined = this.chats.get(ref.key)?.cwd
+    if (cwd === undefined) {
+      try {
+        cwd = await this.cwdFor(ref)
+      } catch {
+        cwd = normalizePath(this.opts.config.workspacePath) || process.cwd()
+      }
+    }
+    const voice = await this.voiceOf(fileRef, cwd)
+    const text = voice.text.trim()
+    if (text === '') return false
+    const lowered = text.toLowerCase()
+    return words.some(word => word !== '' && lowered.includes(word.toLowerCase()))
+  }
+
+  /** 语音触发词：voiceTriggerKeywords，留空则用 triggerKeywords */
+  private voiceTriggerWords(): string[] {
+    const raw = this.opts.config.voiceTriggerKeywords.trim()
+    const list = raw === '' ? [...this.opts.config.triggerKeywords] : raw.split(/[,，\s]+/)
+    return list.map(word => String(word).trim()).filter(word => word !== '')
+  }
+
+  /**
+   * 取一段语音的本地文件 + 转写文本（带缓存）。
+   * 触发判定与入站处理都会调它，同一段语音只下载/识别一次。
+   */
+  private async voiceOf(fileRef: string, cwd: string): Promise<{ path?: string; text: string; error?: string }> {
+    const cached = this.voiceCaches.get(fileRef)
+    if (cached !== undefined) return { path: cached.path, text: cached.text }
+    const inbox = await ensureInbox(cwd)
+    const fileName = nameFromRef(fileRef, 'voice.mp3')
+    let savedPath: string | undefined
+    try {
+      const info = await this.opts.conn.call<{ base64?: string; url?: string; file?: string }>('get_record', { file: fileRef, out_format: 'mp3' })
+      const isHttp = (v: unknown): v is string => typeof v === 'string' && /^https?:\/\//i.test(v)
+      if (isHttp(info?.url)) {
+        const saved = await downloadToFile(info.url, inbox, fileName, DEFAULT_MAX_FILE_BYTES)
+        savedPath = saved.path
+      } else if (typeof info?.base64 === 'string' && info.base64 !== '') {
+        const buffer = base64UrlToBuffer(info.base64)
+        savedPath = join(inbox, Date.now().toString(36) + '-' + fileName)
+        await writeFile(savedPath, buffer)
+      }
+    } catch (error) {
+      return { text: '', error: describe(error) }
+    }
+    if (savedPath === undefined) return { text: '', error: 'get_record 没给音频（NapCat 可能不支持）' }
+    const tts = this.opts.ctx.get?.('dshTts') as { transcribe?: (p: string) => Promise<{ text: string }> } | undefined
+    if (tts?.transcribe === undefined) {
+      this.voiceCaches.set(fileRef, { path: savedPath, text: '' })
+      return { path: savedPath, text: '', error: '没有安装 dsh-tts' }
+    }
+    try {
+      const result = await tts.transcribe(savedPath)
+      this.voiceCaches.set(fileRef, { path: savedPath, text: result.text })
+      if (this.voiceCaches.size > 200) {
+        const firstKey = this.voiceCaches.keys().next().value
+        if (firstKey !== undefined) this.voiceCaches.delete(firstKey)
+      }
+      return { path: savedPath, text: result.text }
+    } catch (error) {
+      this.voiceCaches.set(fileRef, { path: savedPath, text: '' })
+      return { path: savedPath, text: '', error: describe(error) }
+    }
+  }
+
   private async resolveInboundMedia(msg: ObMessageEvent, chat: ChatState): Promise<{ notes: string[]; blocks: ContentBlock[]; parts: Array<Record<string, unknown>> }> {
-    const media = segmentsOf(msg.message).filter(seg => seg.type === 'image' || seg.type === 'file' || seg.type === 'video')
+    const media = segmentsOf(msg.message).filter(seg => seg.type === 'image' || seg.type === 'file' || seg.type === 'video' || seg.type === 'record')
     // 引用回复：被引用的那条消息里的图/文件不在当前 segments 里，用 get_msg 取回来
     const replySeg = segmentsOf(msg.message).find(seg => seg.type === 'reply')
     const replyId = replySeg === undefined ? '' : String((replySeg.data as { id?: unknown } | undefined)?.id ?? '')
@@ -1670,6 +1801,17 @@ export class Bridge {
           // 路径注释永远保留：无视觉模型只会拿到宿主的占位文本，路径是它们唯一的抓手；
           // 视觉模型另外还能直接拿到 image block。
           notes.push('[图片: ' + saved.path + ']' + (attached ? '' : '（未登记为附件，仅路径）'))
+        } else if (seg.type === 'record') {
+          // QQ 语音：统一走 voiceOf（带缓存，触发判定已经识别过的这里不再重复花钱）
+          const voice = await this.voiceOf(fileRef, cwd)
+          if (voice.path === undefined) {
+            notes.push('[语音]（拿不到音频文件：' + (voice.error ?? '未知') + '）')
+          } else if (voice.text.trim() !== '') {
+            notes.push('[语音: ' + voice.path + '] 转写：' + voice.text.trim())
+          } else {
+            notes.push('[语音: ' + voice.path + ']（' + (voice.error === undefined ? '没识别出内容' : '识别失败：' + voice.error) + '）')
+          }
+          if (this.opts.config.voiceReplyMode === 'mirror') chat.replyWithVoice = true
         } else if (seg.type === 'video') {
           const isHttp = (v: unknown): v is string => typeof v === 'string' && /^https?:\/\//i.test(v)
           const fileName = nameFromRef(fileRef, 'video.mp4')
@@ -2404,6 +2546,73 @@ export class Bridge {
     }
     // 记录这轮带没带表情（供下轮注入做频率提示）
     this.noteReplyMemeState(chat.ref.key, plan.images.length > 0 || plan.segments.some(part => part.kind === 'face'))
+    // 语音回复：always=每条都配；mirror=对方发语音时才配
+    const wantVoice = this.opts.config.voiceReplyMode === 'always'
+      || (this.opts.config.voiceReplyMode === 'mirror' && chat.replyWithVoice === true)
+    chat.replyWithVoice = false
+    if (wantVoice && this.opts.config.voiceEnabled && text.trim() !== '') {
+      void this.sendVoiceText(chat, text).catch(error => { this.opts.log('debug', '语音回复失败: ' + describe(error)) })
+    }
+  }
+
+  /**
+   * 设置页「发一条测试语音」用：给指定会话（或最近有对话的会话）发一条语音。
+   * 返回结构化结果，路由层直接回 JSON。
+   */
+  async testVoice(input: { chatId?: string; text?: string } = {}): Promise<{ ok: boolean; chat?: string; bytes?: number; error?: string }> {
+    const text = (input.text ?? '').trim() === '' ? '你好，我是小灯，这是一条语音测试。' : String(input.text).trim()
+    let target = (input.chatId ?? '').trim() !== '' ? String(input.chatId).trim() : this.opts.config.voiceTestChatId.trim()
+    if (target === '') {
+      // 找最近说过话的会话
+      let latestAt = 0
+      for (const [key, chat] of this.chats) {
+        const at = this.stats.lastMessageAt
+        if (at >= latestAt) {
+          latestAt = at
+          target = key
+        }
+        void chat
+      }
+    }
+    if (target === '') return { ok: false, error: '还没有任何 QQ 会话，先在群里 @ 我一次，或填「测试目标会话」' }
+    const match = /^(private|group):(.+)$/.exec(target)
+    if (match === null) return { ok: false, error: '会话格式要写成 private:QQ号 或 group:群号（当前：' + target + '）' }
+    const chat = this.chats.get(target)
+    const tts = this.opts.ctx.get?.('dshTts') as { synthesize?: (text: string, options?: { voice?: string }) => Promise<{ path: string }> } | undefined
+    const synthesize = tts?.synthesize
+    if (synthesize === undefined) return { ok: false, error: '没有安装 dsh-tts（语音合成插件）' }
+    try {
+      const clipped = text.length > this.opts.config.voiceMaxChars ? text.slice(0, this.opts.config.voiceMaxChars) : text
+      const made = await synthesize(clipped, { voice: this.opts.config.voiceTtsVoice })
+      const { readFile } = await import('node:fs/promises')
+      const buffer = await readFile(made.path)
+      const ref = chat?.ref ?? { kind: match[1] === 'group' ? 'group' : 'private', id: match[2] ?? '', key: target }
+      const params: Record<string, unknown> = ref.kind === 'group'
+        ? { group_id: ref.id, message: [{ type: 'record', data: { file: 'base64://' + buffer.toString('base64') } }] }
+        : { user_id: ref.id, message: [{ type: 'record', data: { file: 'base64://' + buffer.toString('base64') } }] }
+      await this.opts.conn.call('send_msg', params)
+      this.opts.log('info', '测试语音已发送 → ' + target + '（' + Math.round(buffer.length / 1024) + 'KB）')
+      return { ok: true, chat: target, bytes: buffer.length }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 用语音回一句话：合成 → record 段。失败只记日志（文字已经发出去了）。 */
+  async sendVoiceText(chat: ChatState, text: string): Promise<boolean> {
+    const tts = this.opts.ctx.get?.('dshTts') as { synthesize?: (text: string, options?: { voice?: string }) => Promise<{ path: string }> } | undefined
+    const synthesize = tts?.synthesize
+    if (synthesize === undefined) {
+      this.opts.log('warn', '发语音失败：没有安装 dsh-tts')
+      return false
+    }
+    const clipped = text.length > this.opts.config.voiceMaxChars ? text.slice(0, this.opts.config.voiceMaxChars) : text
+    const made = await synthesize(clipped, { voice: this.opts.config.voiceTtsVoice })
+    const { readFile } = await import('node:fs/promises')
+    const buffer = await readFile(made.path)
+    const ok = await this.sendSegments(chat, [{ type: 'record', data: { file: 'base64://' + buffer.toString('base64') } }])
+    if (ok) this.opts.log('info', '已发送语音到 ' + chat.ref.key + '（' + Math.round(buffer.length / 1024) + 'KB）')
+    return ok
   }
 
   /**

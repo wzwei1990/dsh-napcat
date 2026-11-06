@@ -23,7 +23,7 @@ export { Config }
 
 export const name = 'dsh-napcat'
 /** tools = 注册工具；agents = 按 QQ 会话创建/恢复 agent；workspaceRegistry = 把会话挂进工作区。 */
-export const inject = ['tools', 'agents', 'workspaceRegistry', 'sessionPersistence', 'systemPrompt', 'agentDefaultModel', 'agentPresets', 'approval', 'sessionTitle', 'attachments']
+export const inject = ['tools', 'webServer', 'agents', 'workspaceRegistry', 'sessionPersistence', 'systemPrompt', 'agentDefaultModel', 'agentPresets', 'approval', 'sessionTitle', 'attachments']
 
 const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2 }
 
@@ -92,6 +92,35 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
   memeSearch: (query, limit) => bridge.searchMemeForTool(query, limit),
   memeCatalog: () => bridge.memeCatalogForTool(),
   })
+
+  // 设置页「发一条测试语音」：给指定/最近的会话发一条语音（用户在 QQ 里听得到才算通）
+  try {
+    const webServer = (ctx as unknown as { webServer?: { register?(route: { kind: 'prefix'; path: string; handler: (req: { url?: string }, res: { writeHead?(code: number, headers?: Record<string, string>): void; end?(body?: string): void }) => void }): () => void } }).webServer
+    webServer?.register?.({
+      kind: 'prefix',
+      path: '/dsh-napcat/api',
+      handler: (req, res) => {
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        if (url.pathname !== '/dsh-napcat/api/test-voice') {
+          res.writeHead?.(404, { 'content-type': 'text/plain; charset=utf-8' })
+          res.end?.('not found')
+          return
+        }
+        const text = url.searchParams.get('text') ?? ''
+        const chatId = url.searchParams.get('chat_id') ?? ''
+        void bridge.testVoice({ chatId, text }).then(result => {
+          res.writeHead?.(200, { 'content-type': 'application/json; charset=utf-8' })
+          res.end?.(JSON.stringify(result))
+        }).catch(error => {
+          res.writeHead?.(500, { 'content-type': 'application/json; charset=utf-8' })
+          res.end?.(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }))
+        })
+      },
+    })
+    log('info', '已挂载 /dsh-napcat/api/test-voice（设置页测试按钮用）')
+  } catch (error) {
+    log('warn', '挂载测试语音路由失败（不影响其它功能）: ' + (error instanceof Error ? error.message : String(error)))
+  }
 
   // 群/人性格：照 dsh-im 的动态提示词上下文（按 sessionId 注入额外人设）
   ctx.inject(['systemPrompt'], promptCtx => {

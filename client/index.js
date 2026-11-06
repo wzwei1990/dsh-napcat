@@ -160,6 +160,46 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
             hint: 'Edge 例：zh-CN-YunxiNeural；火山例：zh_female_vv_uranus_bigtts',
           },
           { key: 'voiceMaxChars', label: '单条语音最长字符（默认 200）', kind: 'number' },
+          {
+            key: 'voiceTriggerMode',
+            label: '群语音怎么触发我（QQ 语音不能带 @）',
+            kind: 'select',
+            options: [
+              ['off', 'off · 群语音不触发（默认）'],
+              ['keywords', 'keywords · 转写里出现触发词才触发'],
+              ['always', 'always · 任何语音都触发（费额度）'],
+            ],
+            hint: 'keywords 会把每条语音都转写一次（有识别费用），命中触发词才回；always 是每条都回。私聊不受此限制。',
+          },
+          {
+            key: 'voiceTriggerKeywords',
+            label: '语音触发词（逗号分隔；留空=用 triggerKeywords）',
+            kind: 'text',
+            hint: '例：小灯,灯灯。语音转写里出现任一个就当我被叫到。',
+          },
+          {
+            key: 'voiceReplyMode',
+            label: '回复语音策略',
+            kind: 'select',
+            options: [
+              ['off', 'off · 只用文字（默认）'],
+              ['mirror', 'mirror · 对方发语音时我也用语音回'],
+              ['always', 'always · 每条回复都配一条语音'],
+            ],
+            hint: 'always 比较吵，建议先试 mirror。',
+          },
+          {
+            key: 'voiceTestChatId',
+            label: '测试目标会话（private:QQ号 或 group:群号；留空=最近有对话的会话）',
+            kind: 'text',
+            hint: '填了之后下面的「发一条测试语音」就发到这里。',
+          },
+          {
+            kind: 'button',
+            label: '发一条测试语音',
+            action: 'test-voice',
+            hint: '会真的往 QQ 发一条语音，用来确认 NapCat 收不收 mp3（收不到就说明要转 silk）。',
+          },
           { section: '游戏攻略' },
         {
           key: 'gameWikiEnabled',
@@ -235,6 +275,36 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
 
       function renderField(field, value, onChange) {
         const id = NS + '-' + field.key
+        if (field.kind === 'button') {
+          // 自包含按钮：点了自己发请求、自己在按钮上显示结果（不依赖页面状态）
+          return react.createElement('div', { style: style.row, key: field.key },
+            react.createElement('button', {
+              style: style.primary,
+              onClick: (event) => {
+                const button = event.currentTarget
+                const input = document.getElementById(NS + '-voiceTestChatId')
+                const chatId = input && typeof input.value === 'string' ? input.value.trim() : ''
+                const label = button.textContent
+                button.disabled = true
+                button.textContent = '发送中…（合成 + 上传）'
+                const url = '/dsh-napcat/api/test-voice?chat_id=' + encodeURIComponent(chatId)
+                  + '&text=' + encodeURIComponent('你好，我是小灯，这是一条语音测试。')
+                fetch(url, { cache: 'no-store' })
+                  .then((response) => response.json())
+                  .then((payload) => {
+                    button.textContent = payload && payload.ok
+                      ? '✅ 已发到 ' + String(payload.chat) + '（' + Math.round((payload.bytes || 0) / 1024) + 'KB）'
+                      : '❌ ' + String(payload && payload.error ? payload.error : '未知错误')
+                  })
+                  .catch((error) => { button.textContent = '❌ ' + String(error && error.message ? error.message : error) })
+                  .finally(() => {
+                    button.disabled = false
+                    setTimeout(() => { button.textContent = label }, 10000)
+                  })
+              },
+            }, field.label),
+            field.hint === undefined ? null : react.createElement('p', { style: style.hint }, field.hint))
+        }
         if (field.kind === 'boolean') {
           return react.createElement('div', { style: style.checkRow, key: field.key },
             react.createElement('input', {

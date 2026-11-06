@@ -8,11 +8,45 @@
  * 重启后 create 失败即回退 resume，于是同一 QQ 会话自动续上上下文。
  */
 import type { Context } from '@deepseek-ai/cordis';
+import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { Config } from './config.js';
+import { type ChatRef } from './chat.js';
 import type { LogLevel, OneBotConnection } from './onebot.js';
 import { SubscriptionStore } from './subscriptions.js';
 import { ProviderRegistry } from './providers.js';
 import type { ObEvent } from './types.js';
+/** 投递后多久没收到 turn/start 就判定会话失效。 */
+interface ChatState {
+    ref: ChatRef;
+    /** 本轮是否额外回一条语音（voiceReplyMode 决定；sendText 发完清掉） */
+    replyWithVoice?: boolean;
+    agent: Agent;
+    dispose: () => Promise<void>;
+    /** 本轮已产生的助手文本（turn/end 时一次性发出）。 */
+    buffer: string[];
+    /** 最近一条触发了回复的消息 id（replyAsQuote 与"回复机器人也算提及"用）。 */
+    lastReplyId: string;
+    /** 机器人最近发出的消息 id（用于判定「回复机器人」，最多 30 条） */
+    recentReplyIds?: string[];
+    /** 本轮是否已经收到 turn/start（看门狗判定用）。 */
+    turnStarted?: boolean;
+    /** 投递后的看门狗定时器。 */
+    startTimer?: ReturnType<typeof setTimeout>;
+    /** true=本次是新建的会话；false=resume 的旧会话（可能已归档，需要看门狗）。 */
+    fresh?: boolean;
+    /** 本条消息投递时刻（看门狗判定存活用）。 */
+    dispatchedAt?: number;
+    /** 这个会话最近一次收到任何事件的时刻。 */
+    lastEventAt?: number;
+    /** 该会话的工作目录（收件箱放在它下面）。 */
+    cwd?: string;
+    /** 是否已按首条消息设置过标题。 */
+    titleSet?: boolean;
+    /** 最近一次投递给模型的文本（ENOENT 自愈时重投用）。 */
+    lastText?: string;
+    /** 这条消息是否已经重试过一次。 */
+    retried?: boolean;
+}
 export interface BridgeOptions {
     ctx: Context;
     config: Config;
@@ -43,6 +77,8 @@ export declare class Bridge {
     /** 上次预热尝试时间（避免频繁重试）。 */
     private readonly warmAttempts;
     private readonly chats;
+    /** 语音识别缓存：fileRef → { path, text }（触发判定与入站处理共用，避免识别两次） */
+    private readonly voiceCaches;
     private readonly bySession;
     /** 归档/失效后换用新会话 id 的后缀（下次建会话时带上）。 */
     private readonly sessionSuffixes;
@@ -216,6 +252,20 @@ export declare class Bridge {
      */
     private admitImage;
     /** 把消息里的图片/文件下载到会话收件箱，返回给模型的文本注释（[图片: path]）。 */
+    /**
+     * 群语音算不算"叫了机器人"（QQ 语音不能带 @，只能按策略判断）：
+     *   off      → 永不触发
+     *   keywords → 转写文本命中触发词（voiceTriggerKeywords，留空用 triggerKeywords）才触发
+     *   always   → 任何语音都触发（费 ASR + 模型额度）
+     */
+    private voiceTriggered;
+    /** 语音触发词：voiceTriggerKeywords，留空则用 triggerKeywords */
+    private voiceTriggerWords;
+    /**
+     * 取一段语音的本地文件 + 转写文本（带缓存）。
+     * 触发判定与入站处理都会调它，同一段语音只下载/识别一次。
+     */
+    private voiceOf;
     private resolveInboundMedia;
     /** 同一聊天并发进来时只装配一次（并发 create 会撞 write handle）。 */
     private readonly pendingChats;
@@ -279,6 +329,21 @@ export declare class Bridge {
     private replyDanger;
     private sendText;
     /**
+     * 设置页「发一条测试语音」用：给指定会话（或最近有对话的会话）发一条语音。
+     * 返回结构化结果，路由层直接回 JSON。
+     */
+    testVoice(input?: {
+        chatId?: string;
+        text?: string;
+    }): Promise<{
+        ok: boolean;
+        chat?: string;
+        bytes?: number;
+        error?: string;
+    }>;
+    /** 用语音回一句话：合成 → record 段。失败只记日志（文字已经发出去了）。 */
+    sendVoiceText(chat: ChatState, text: string): Promise<boolean>;
+    /**
      * 出站预处理：把回复里的标记解析成「文字段 + 原生表情段」和「待发图片」。
      *   [图片:<路径>] / ![alt](<路径>)  → 收集为图片，解析后单独发
      *   [表情:<描述>]                   → 图库有图就当图片发；没图就换成 QQ 原生表情，**就地嵌进文字流**
@@ -338,3 +403,4 @@ export declare function trimParts(parts: OutPart[]): OutPart[];
  * maxChars <= 0 表示不分段。
  */
 export declare function splitSegments(parts: OutPart[], maxChars: number): OutPart[][];
+export {};
