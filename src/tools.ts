@@ -627,8 +627,8 @@ export function registerTools(
       }
       try {
         const id = await sendSegments(target, [{ type: 'record', data: { file: 'base64://' + base64 } }])
-        log('info', '已发送语音到 ' + target + '（' + how + '）')
-        return '已发送语音到 ' + target + '（' + how + '，' + String(Math.round(base64.length * 0.75 / 1024)) + 'KB）'
+        log('info', '已发送语音到 ' + target.kind + ':' + target.id + '（' + how + '）')
+        return '已发送语音到 ' + target.kind + ':' + target.id + '（' + how + '，' + String(Math.round(base64.length * 0.75 / 1024)) + 'KB）'
           + (id === undefined ? '' : '，message_id: ' + id)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
