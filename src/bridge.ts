@@ -15,6 +15,15 @@ import { basename, isAbsolute, join, relative } from 'node:path'
 
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
+
+/**
+ * 宿主兼容调用：installModelSelection 的签名在两个大版本里不同
+ *   0.2.1-rc.x → (agentCtx, selection)
+ *   0.2.2-rc.1 → (agentCtx)      （选择改由 setup scope 负责）
+ * 统一按两参数调用：老版本用得上，新版本忽略多余的第二个参数。
+ */
+type InstallModelSelectionLike = (agentCtx: unknown, selection?: unknown) => unknown
+const installSelectionCompat = installModelSelection as unknown as InstallModelSelectionLike
 import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 /** 宿主 AgentRegistry.create 接受的模型选项（避免自己猜 ReasoningEffortId 的品牌类型）。 */
 type AgentOptions = NonNullable<NonNullable<Parameters<AgentRegistry['create']>[0]>['agentOptions']>
@@ -1089,7 +1098,7 @@ export class Bridge {
           this.opts.log('debug', '归档 agent 挂预设失败: ' + describe(error))
         }
       }
-      installModelSelection(agentCtx as never, selectionRef as never)
+      installSelectionCompat(agentCtx, selectionRef)
     }
     const meta: { cwd: string; agentPreset?: string } = { cwd }
     if (presetId !== undefined) meta.agentPreset = presetId
@@ -2007,7 +2016,7 @@ export class Bridge {
       if (selectionRef === undefined) {
         this.opts.log('warn', '没有可用模型（agentDefaultModel 缺失或未选择），这一轮可能空跑')
       } else {
-        installModelSelection(agentCtx as never, selectionRef as never)
+        installSelectionCompat(agentCtx, selectionRef)
         this.opts.log('debug', 'agent 模型: ' + selectionRef.current.provider + '/' + selectionRef.current.model)
       }
     }
