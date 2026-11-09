@@ -7,7 +7,7 @@
  * - 合并时同名/同义条目**累加 hits 并取更强的内容**，不是简单覆盖
  * - 淘汰：有效分低 + 太久没出现 → 丢弃；同类超过上限按有效分截断
  */
-export type MemoryKind = 'summary' | 'glossary' | 'setting' | 'person' | 'preference' | 'style' | 'todo' | 'event';
+export type MemoryKind = 'summary' | 'glossary' | 'setting' | 'person' | 'preference' | 'style' | 'todo' | 'event' | 'trait';
 export interface MemoryItem {
     kind: MemoryKind;
     /** 归一化后的键（人名/词条用小写去标点） */

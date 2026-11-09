@@ -98,10 +98,10 @@ export declare class Bridge {
     private readonly bySession;
     /** 归档/失效后换用新会话 id 的后缀（下次建会话时带上）。 */
     private readonly sessionSuffixes;
-    /** sessionId → 该会话的人设文本（来自 personaOverrides）。 */
+    /** sessionId → 渲染好的人设块（同步注入 systemPrompt.context 用）。 */
     private readonly personaBySession;
-    /** 解析后的人设表（chat key → 文本）。 */
-    private personas;
+    /** sessionId → 人设块最后一次生成时间（10 分钟缓存，避免每轮读盘）。 */
+    private readonly personaBuiltAt;
     private sessionEventOff;
     private stopped;
     private mentionWarned;
@@ -255,6 +255,11 @@ export declare class Bridge {
     private warmup;
     private handleEventInner;
     /** 写一行诊断到 <会话cwd>/napcat-inbox/_image-debug.log（出问题时能自查，用户随时可删）。 */
+    /**
+     * 判断某个已落盘的图片是不是表情包（头部特征 + 群内频次）。
+     * 观察层（recent 记录）和当前消息（附件注入）共用，保证两处判定一致。
+     */
+    private stickerOfFile;
     /** 读图片前 N 字节（频次指纹用）。 */
     private headOfImage;
     /** 读图片前 512 字节解析头部（表情包判定用，失败就当普通图）。 */
@@ -302,9 +307,36 @@ export declare class Bridge {
      */
     /** 该会话是否已被归档（归档门禁会把每一轮判成 blocked，所以要换新会话）。 */
     private isArchived;
-    /** 重新解析 personaOverrides（配置热更新时调用）。 */
-    refreshPersonas(): void;
-    /** systemPrompt.context 的取值函数：按 assembly 里的 sessionId 找该会话的人设。 */
+    /** 人物卡目录：~/.dsh/dsh-napcat/persona（放 <名字>.json 就能切）。 */
+    private personaDir;
+    /** 当前人物卡：内联 JSON > persona/<name>.json > 内置卡 > 默认卡。 */
+    private currentPersonaCard;
+    /** 工具用：本群关系摘要（含性格倾向）。 */
+    personaDigest(chatKey: string): Promise<{
+        summary?: string;
+        people: string[];
+        style: string[];
+        glossary: string[];
+        preference: string[];
+        traits: string[];
+    }>;
+    /** 工具用：追加一条性格倾向。 */
+    personaTrait(chatKey: string, text: string): Promise<string[]>;
+    /** 工具用：当前人物卡（展示字段）。 */
+    personaCardInfo(): {
+        name: string;
+        personality: string;
+        aliases: string[];
+    };
+    /** 工具用：列出可用人物卡（内置 + persona 目录）。 */
+    personaCards(): string[];
+    /** 配置热更新：丢掉所有人设缓存，下一轮重建。 */
+    invalidatePersona(): void;
+    /** 生成某个会话的人设块并缓存（人物卡 → 本群关系 → 性格倾向）。 */
+    private buildPersona;
+    /** 缓存过期（10 分钟）就重建；在 dispatch 里调用，不阻塞 systemPrompt 的同步取值。 */
+    private refreshPersonaIfStale;
+    /** systemPrompt.context 的取值函数：按 assembly 里的 sessionId 取缓存好的人设块。 */
     personaText(assembly: {
         agent?: {
             session?: {

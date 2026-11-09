@@ -39,8 +39,6 @@ export declare function shortHash(text: string): string;
  * 解析「群/人性格」配置：每行 `<group:群号|private:QQ>=<人设文本>`，
  * 支持 `#` 注释与空行。返回 key → 文本（key 形如 `group:123`）。
  */
-export declare function parsePersonaOverrides(raw: string): Map<string, string>;
-/** 会话标题：`MM-DD HH:mm`（本地时间；内容容易乱，所以只标时间）。 */
 export declare function titleFrom(text: string, now?: Date): string;
 /** 文件名模糊匹配打分（0 = 不匹配）。用户常只记得一部分名字。 */
 export declare function scoreFileName(name: string, query: string): number;

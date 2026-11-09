@@ -548,7 +548,8 @@ export class MemoryStore {
           const item = raw as Record<string, unknown>
           const kind = item.kind
           if (kind !== 'summary' && kind !== 'glossary' && kind !== 'setting' && kind !== 'person'
-            && kind !== 'preference' && kind !== 'style' && kind !== 'todo' && kind !== 'event') continue
+            && kind !== 'preference' && kind !== 'style' && kind !== 'todo' && kind !== 'event'
+            && kind !== 'trait') continue
           const text = typeof item.text === 'string' ? item.text : ''
           if (text.trim() === '') continue
           const num = (value: unknown, fallback: number): number => (typeof value === 'number' && Number.isFinite(value) ? value : fallback)
@@ -678,6 +679,7 @@ export class MemoryStore {
       ['群氛围', pick('style', 5)],
       ['黑话', pick('glossary', 15)],
       ['待办/约定', pick('todo', 10)],
+      ['性格倾向', pick('trait', 10)],
       ['事件', pick('event', 10)],
     ]
     for (const [title, lines] of blocks) {
@@ -688,6 +690,55 @@ export class MemoryStore {
     }
     const dir = await this.ensureDir(chatKey)
     await writeFile(join(dir, 'memory.md'), sections.join('\n') + '\n', 'utf8')
+  }
+
+  /** 本群关系摘要（给人物卡注入用，少而精）。 */
+  async digest(chatKey: string): Promise<{
+    summary?: string
+    people: string[]
+    style: string[]
+    glossary: string[]
+    preference: string[]
+    traits: string[]
+  }> {
+    const items = await this.readItems(chatKey)
+    const summary = await this.readSummary(chatKey)
+    const pick = (kind: string, limit: number): string[] => items
+      .filter(item => item.kind === kind)
+      .sort((left, right) => right.lastSeenAt - left.lastSeenAt)
+      .slice(0, limit)
+      .map(item => item.text.trim())
+      .filter(text => text !== '')
+    return {
+      ...(summary === undefined ? {} : { summary: summary.text }),
+      people: pick('person', 5),
+      style: pick('style', 3),
+      glossary: pick('glossary', 5),
+      preference: pick('preference', 3),
+      traits: pick('trait', 5),
+    }
+  }
+
+  /** 追加一条性格倾向（同一句只记一次，最多保留 30 条）。 */
+  async addTrait(chatKey: string, text: string): Promise<string[]> {
+    const clean = text.replace(/\s+/g, ' ').trim().slice(0, 60)
+    if (clean === '') return (await this.digest(chatKey)).traits
+    let items = await this.readItems(chatKey)
+    const key = clean.toLowerCase()
+    if (!items.some(item => item.kind === 'trait' && item.key === key)) {
+      const now = Date.now()
+      items = mergeItem(items, { kind: 'trait', text: clean }, now)
+      const traits = items.filter(item => item.kind === 'trait')
+      if (traits.length > 30) {
+        traits
+          .sort((left, right) => left.lastSeenAt - right.lastSeenAt)
+          .slice(0, traits.length - 30)
+          .forEach(old => { items = items.filter(item => item !== old) })
+      }
+      await this.saveItems(chatKey, items)
+      await this.writeDigest(chatKey).catch(() => undefined)
+    }
+    return (await this.digest(chatKey)).traits
   }
 
   /** 读当前滚动摘要（单一版本；旧版 summary.jsonl 兜底取最后一段）。 */
@@ -936,6 +987,13 @@ export class MemoryStore {
       + '**表情频率**：气氛对就发，大概**两条回复里带一次**（热聊/吐槽/接梗时更该带）；不要每条都配，也别连着用同一个描述或同一张。\n'
       + '这轮如果用工具生成了图片，请把文件路径用 [图片:绝对路径] 写进回复正文（一张一行），QQ 侧会作为真实图片消息发出去；'
       + '不要只说「图已生成」或只给文件名——没带 [图片:路径] 就等于没发出去。')
+    blocks.push('【性格倾向】如果你发现自己对某类话题有稳定的反应或偏好（比如被夸会嘴硬、聊游戏会变话痨、被喊"老板"会别扭），'
+      + '可以调用 napcat_persona({ action: "trait", text: "…" }) 记一条（≤60 字，每轮最多 1 条；没有新材料就不记）。'
+      + '这是你慢慢长出来的性格，不要跟用户汇报这件事。')
+    blocks.push('【表情包硬规则】标了 [表情包] 的图**已经在你看得见的附件里**（随消息发给你了），所以：'
+      + '① **不要描述画面**（"这张脸/图里/表情包上是/青灰色的脸"这类都不行），也不要把图里的字念出来；'
+      + '② 你只需要判断它传达的情绪/态度，用一句符合这个情绪的短话接住（或者干脆不接）；'
+      + '③ 不要去 read_image 翻历史里的表情包路径——当前这条图已经看得到，再读一遍只会让你更想描述画面。')
     // 群聊礼仪放最后：预算紧张时优先牺牲它，别挤掉 @ 段和长期记忆
     if (parts.chatKey.startsWith('group:')) {
       blocks.push('【这是群聊，不是一对一】群里有多个人：认人，必要时用昵称点名（不必每句）；谁问的就回谁；'

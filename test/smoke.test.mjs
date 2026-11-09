@@ -9,12 +9,14 @@ import { base64UrlToBuffer, isHttpUrl, nameFromRef, safeName } from '../lib/medi
 import { MemoryStore } from '../lib/memory.js'
 import { decide, inQuietHours, newChatState, parseQuietHours, poissonHit, skipBackoffFactor } from '../lib/proactive.js'
 import { ImageCache, dayKey, urlHash } from '../lib/imagecache.js'
-import { findKeyword, mentions, parseCq, parsePersonaOverrides, rankByFileName, scoreFileName, shortHash, splitText, stripKeyword, titleFrom, toText } from '../lib/text.js'
+import { findKeyword, mentions, parseCq, rankByFileName, scoreFileName, shortHash, splitText, stripKeyword, titleFrom, toText } from '../lib/text.js'
 import { allowAccess, chatRefOf, sessionIdForChat } from '../lib/chat.js'
 import { Bridge, mergeQueued, pushQueued } from '../lib/bridge.js'
 import { judgeSticker, readImageHeader } from '../lib/sticker.js'
 import { pruneInbox } from '../lib/media.js'
+import { buildHintBlock, looksLikeHelpRequest } from '../lib/gamewiki.js'
 import { bumpImageFreq, imageKey, loadImageFreq } from '../lib/imagefreq.js'
+import { DEFAULT_CARD, cardFromConfig, loadCard, parseCharacterCard, renderPersona } from '../lib/persona.js'
 import { extractMediaLink, lyricPreview, neteaseSongId, parseOpenGraph, renderLinkBlock } from '../lib/links.js'
 
 const config = {
@@ -106,25 +108,7 @@ test('shortHash 稳定且区分不同路径', () => {
   assert.notEqual(a, c)
   assert.match(a, /^[0-9a-z]{1,7}$/)
 })
-test('parsePersonaOverrides 解析群/人性格', () => {
-  const map = parsePersonaOverrides([
-    '# 注释行',
-    'group:123456=你是群宠小灯，语气活泼',
-    'private:10001 = 私人助理，正式一点',
-    '',
-    '  乱写一行没有等号',
-    'group:999=',
-  ].join('\n'))
-  assert.equal(map.get('group:123456'), '你是群宠小灯，语气活泼')
-  assert.equal(map.get('private:10001'), '私人助理，正式一点')
-  assert.equal(map.has('group:999'), false)   // 空文本丢弃
-  assert.equal(map.size, 2)
-})
 
-test('parsePersonaOverrides 空输入返回空表', () => {
-  assert.equal(parsePersonaOverrides('').size, 0)
-  assert.equal(parsePersonaOverrides('group:1=x\nprivate:2=y').size, 2)
-})
 test('titleFrom 生成 MM-DD HH:mm', () => {
   const at = new Date(2026, 9, 22, 9, 5)
   assert.equal(titleFrom('小灯讲个笑话', at), '10-22 09:05')
@@ -888,7 +872,7 @@ test('游戏词表召回：命中就给出线索与工具用法，不替模型�
   assert.ok(block.includes('影之刃零'))
   assert.ok(block.includes('庞镇'))
   assert.ok(block.includes('game_wiki_search'))
-  assert.ok(block.includes('只是随口讨论/评价'))
+  assert.ok(block.includes('随口讨论'))
   // 没有命中就不注入
   const none = await wiki.hintFor('今天吃什么')
   assert.equal(none, undefined)
@@ -1201,7 +1185,10 @@ test('pushQueued：同文本去重、超 6 条丢最旧', () => {
 test('busy 期间不投递、turn/end 后合并成一条', async () => {
   const calls = []
   const b = Object.create(Bridge.prototype)
-  b.opts = { log: () => {}, ctx: {}, config: {}, conn: {} }
+  b.opts = { log: () => {}, ctx: {}, config: { personaCard: '' }, conn: {} }
+  b.mem = { digest: async () => ({ people: [], style: [], glossary: [], preference: [], traits: [] }) }
+  b.personaBySession = new Map()
+  b.personaBuiltAt = new Map()
   b.stats = { dispatched: 0, replyTurns: 0, proactiveTurns: 0 }
   b.chats = new Map()
   b.bySession = new Map()
@@ -1215,6 +1202,7 @@ test('busy 期间不投递、turn/end 后合并成一条', async () => {
   b.stripArchiveBlock = (x) => x
 
   const agent = {
+    session: { id: 's1' },
     followup: (msg) => {
       const text = (msg.content ?? []).filter(c => c.type === 'text').map(c => c.text).join('')
       calls.push(text)
@@ -1297,6 +1285,10 @@ test('judgeSticker：表情包命中、照片/大图不误判', () => {
   assert.equal(judgeSticker({ header: { format: 'png', width: 1200, height: 1600, hasAlpha: true }, bytes: 2 * 1024 * 1024 }).sticker, false)
   // JPEG 照片/截图不判
   assert.equal(judgeSticker({ header: { format: 'jpeg', width: 1920, height: 1080 }, bytes: 900 * 1024 }).sticker, false)
+  // 小尺寸 JPEG（转存丢了透明通道的表情包）要判
+  assert.equal(judgeSticker({ header: { format: 'jpeg', width: 300, height: 280 }, bytes: 90 * 1024 }).sticker, true)
+  // 大一点的 JPEG 仍不判
+  assert.equal(judgeSticker({ header: { format: 'jpeg', width: 600, height: 600 }, bytes: 300 * 1024 }).sticker, false)
 })
 
 test('pruneInbox：只删超期文件、保留日志与目录', async () => {
@@ -1420,4 +1412,137 @@ test('bumpImageFreq 累计次数并持久化，超 500 条丢最旧', async () =
   assert.equal(Object.keys(after).length, 500)
   assert.ok(after.newest !== undefined, '新的条目保留')
   assert.ok(after.bulk4 === undefined, '最旧的被丢弃')
+})
+
+// ── 人物卡 ──────────────────────────────────────────────────────────
+
+test('parseCharacterCard：兼容 ST V2 包裹与裸字段', () => {
+  const wrapped = JSON.stringify({
+    spec: 'chara_card_v2',
+    data: {
+      name: '小灯',
+      description: '一只灯',
+      personality: '活泼',
+      scenario: '群聊',
+      mes_example: '<START>\n群友：在吗\n小灯：在的',
+      post_history_instructions: '短句',
+    },
+  })
+  const card = parseCharacterCard(wrapped)
+  assert.equal(card.name, '小灯')
+  assert.equal(card.personality, '活泼')
+  assert.ok(card.mesExample.includes('小灯：在的'))
+
+  const flat = parseCharacterCard('{"name":"裸卡","description":"d"}')
+  assert.equal(flat.name, '裸卡')
+  assert.equal(flat.personality, '')
+
+  assert.equal(parseCharacterCard(''), undefined)
+  assert.equal(parseCharacterCard('not json'), undefined)
+})
+
+test('cardFromConfig：坏 JSON 回落内置卡', () => {
+  assert.equal(cardFromConfig('').name, DEFAULT_CARD.name)
+  assert.equal(cardFromConfig('{oops').name, DEFAULT_CARD.name)
+  assert.equal(cardFromConfig('{"name":"自定义"}').name, '自定义')
+})
+
+test('renderPersona：包含身份/示例/关系/性格倾向，且带"不要复述"约束', () => {
+  const custom = cardFromConfig(JSON.stringify({
+    name: '小灯',
+    personality: '活泼',
+    mes_example: '群友：在吗\n小灯：在的',
+  }))
+  const text = renderPersona(custom, {
+    summary: '最近在聊新番',
+    people: ['老王=技术宅'],
+    style: ['爱发车'],
+    glossary: ['车=资源'],
+    preference: ['别提掉头发'],
+    traits: ['被夸会嘴硬', '聊游戏变话痨'],
+  })
+  assert.ok(text.includes('小灯'))
+  assert.ok(text.includes('活泼'))
+  assert.ok(text.includes('小灯：在的'))
+  assert.ok(text.includes('老王=技术宅'))
+  assert.ok(text.includes('被夸会嘴硬'))
+  assert.ok(text.includes('不要在回复里复述'))
+})
+
+test('MemoryStore.digest / addTrait：性格倾向能存能读、去重', async () => {
+  const { mkdtemp } = await import('node:fs/promises')
+  const dir = await mkdtemp(join(tmpdir(), 'persona-digest-'))
+  const store = new MemoryStore({
+    ctx: {}, root: dir, spacePrefix: 'napcat-', backend: 'file',
+    recentLimit: 10, injectRecent: 3, injectMaxChars: 4000, log: () => undefined,
+  })
+  const traits = await store.addTrait('group:9', '被夸会嘴硬')
+  assert.deepEqual(traits, ['被夸会嘴硬'])
+  const again = await store.addTrait('group:9', '被夸会嘴硬')
+  assert.equal(again.length, 1, '同一句不重复记')
+  await store.addTrait('group:9', '聊游戏变话痨')
+  const digest = await store.digest('group:9')
+  assert.equal(digest.traits.length, 2)
+})
+
+test('人物卡别名：数组 / nickname / 渲染时两个名字都认', () => {
+  const card = parseCharacterCard(JSON.stringify({ name: '大肥鱼', aliases: ['小灯'], description: '团宠' }))
+  assert.deepEqual(card.aliases, ['小灯'])
+  const viaNick = parseCharacterCard(JSON.stringify({ name: 'A', nickname: '小A' }))
+  assert.deepEqual(viaNick.aliases, ['小A'])
+  const text = renderPersona(cardFromConfig(JSON.stringify({ name: '大肥鱼', aliases: ['小灯'] })), {})
+  assert.ok(text.includes('大肥鱼'))
+  assert.ok(text.includes('小灯'))
+})
+
+test('loadCard：内联 > 文件 > 内置 > 默认', () => {
+  const files = { '/p/default.json': JSON.stringify({ name: '文件卡' }) }
+  const opts = {
+    name: 'default',
+    inline: '',
+    dir: '/p',
+    readFile: (f) => files[f],
+    exists: (f) => files[f] !== undefined,
+    join: (...parts) => parts.join('/'),
+  }
+  assert.equal(loadCard({ ...opts, inline: JSON.stringify({ name: '内联卡' }) }).name, '内联卡')
+  assert.equal(loadCard(opts).name, '文件卡')
+  assert.equal(loadCard({ ...opts, name: 'tsundere' }).name, '毒舌同事')
+  assert.equal(loadCard({ ...opts, name: '不存在的' }).name, DEFAULT_CARD.name)
+})
+
+// ── 游戏线索注入 ────────────────────────────────────────────────────
+
+test('looksLikeHelpRequest 区分求解与随口讨论', () => {
+  assert.equal(looksLikeHelpRequest('这个 boss 怎么打'), true)
+  assert.equal(looksLikeHelpRequest('我在哪能拿到坚岩护腕？'), true)
+  assert.equal(looksLikeHelpRequest('小小boss还挺牛逼'), false)
+  assert.equal(looksLikeHelpRequest('这游戏画面不错'), false)
+})
+
+test('buildHintBlock：求助时要求先查并给具体下一步，禁止空话', () => {
+  const help = buildHintBlock([{ game: '影之刃零', hits: ['玉儿', '血肉花'] }], { askedForHelp: true })
+  assert.ok(help.includes('回答要给到点子上'))
+  assert.ok(help.includes('具体答案/下一步'))
+  assert.ok(help.includes('多练练'))
+  assert.ok(help.includes('game_wiki_search'))
+
+  const chat = buildHintBlock([{ game: '影之刃零', hits: [] }], { askedForHelp: false, fromRecent: true })
+  assert.ok(chat.includes('本群最近在聊'))
+  assert.ok(chat.includes('可以不查'))
+  assert.ok(!chat.includes('回答要给到点子上'))
+})
+
+test('GameWiki：最近聊过的游戏在关键词缺失时也能补线索', async () => {
+  const { GameWiki } = await import('../lib/gamewiki.js')
+  const svc = { detect: async (text) => (text.includes('庞镇') ? [{ game: '影之刃零', hits: ['庞镇'] }] : []) }
+  const ctx = { get: (name) => (name === 'dshGame' ? svc : undefined) }
+  const wiki = new GameWiki({ ctx, enabled: true, log: () => {} })
+  await wiki.hintFor('我在庞镇卡住了', 'group:1')
+  const later = await wiki.hintFor('这个 boss 怎么打', 'group:1')
+  assert.ok(later !== undefined)
+  assert.ok(later.includes('影之刃零'))
+  assert.ok(later.includes('回答要给到点子上'))
+  // 别的群不该继承
+  assert.equal(await wiki.hintFor('这个 boss 怎么打', 'group:2'), undefined)
 })

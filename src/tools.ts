@@ -45,6 +45,14 @@ function parseChatId(raw: string): { kind: 'private' | 'group'; id: string } {
 }
 
 export interface ToolDeps {
+  /** 本群关系 + 性格倾向摘要 */
+  personaDigest?: (chatKey: string) => Promise<{ summary?: string; people: string[]; style: string[]; glossary: string[]; preference: string[]; traits: string[] }>
+  /** 追加一条性格倾向，返回最新列表 */
+  personaTrait?: (chatKey: string, text: string) => Promise<string[]>
+  /** 当前人物卡（只取展示用字段） */
+  personaCard?: () => { name: string; personality: string; aliases?: string[] }
+  /** 可用人物卡列表（内置 + persona 目录） */
+  personaCards?: () => string[]
   /** 会话 id → 当前 QQ 会话（省略 chat_id 时用） */
   keyForSession?: (sessionId: string) => string | undefined
   maxImageBytes?: number
@@ -395,6 +403,47 @@ export function registerTools(
       return '已下载群文件「' + fileName + '」（' + sizeText(saved.bytes) + '）\n[文件: ' + saved.path + ']'
     },
   }))
+  // ── 人物卡 / 性格倾向 ──────────────────────────────────────────────────
+  ctx.tools.register(defineTool({
+    name: 'napcat_persona',
+    description: '查看本群的人物卡与最近的性格倾向，或追加一条性格倾向。action=list 看概况；action=traits 只看倾向；action=cards 列出可用人物卡；action=trait 追加（模型发现自己对某类话题有稳定反应时调用，每轮最多 1 条）。',
+    parameters: {
+      action: { type: 'string', required: true, description: 'list / traits / trait' },
+      text: { type: 'string', description: 'action=trait 时要记的倾向（≤60 字）' },
+      chat_id: { type: 'string', description: '可选：private:<QQ> 或 group:<群号>（缺省=当前会话）' },
+    },
+    output: textOutput(),
+    isConcurrencySafe: () => true,
+    execute: async (args, exec) => {
+      const input = args as { action?: string; text?: string; chat_id?: string }
+      const action = String(input.action ?? 'list')
+      const target = resolveChat(input.chat_id, exec)
+      const key = target.kind + ':' + target.id
+      if (deps.personaDigest === undefined || deps.personaTrait === undefined || deps.personaCard === undefined) {
+        return '人物卡功能未就绪（宿主里缺少 Bridge 注入）'
+      }
+      if (action === 'cards') {
+        return '可用人物卡：' + (deps.personaCards === undefined ? '（未知）' : deps.personaCards().join(' / '))
+          + '\n切换方式：设置页「用哪张人物卡」填名字（或放 ~/.dsh/dsh-napcat/persona/<名字>.json）。'
+      }
+      if (action === 'trait') {
+        const text = String(input.text ?? '').trim()
+        if (text === '') return '要记的倾向是空的'
+        const traits = await deps.personaTrait(key, text)
+        return '已记下。当前性格倾向：\n' + (traits.length === 0 ? '（还没有）' : traits.map(x => '- ' + x).join('\n'))
+      }
+      const digest = await deps.personaDigest(key)
+      if (action === 'traits') {
+        return digest.traits.length === 0 ? '这个群还没有积累性格倾向。' : digest.traits.map(x => '- ' + x).join('\n')
+      }
+      const card = deps.personaCard()
+      const aliasText = (card.aliases ?? []).filter(a => a !== card.name)
+      return '人物卡：' + card.name + (aliasText.length > 0 ? '（别名：' + aliasText.join('、') + '）' : '')
+        + '\n性格：' + (card.personality === '' ? '（未设置）' : card.personality)
+        + '\n最近性格倾向：' + (digest.traits.length === 0 ? '（还没有）' : digest.traits.join('；'))
+    },
+  }))
+
   // ── 记忆空间登记 ──────────────────────────────────────────────────────────
   ctx.tools.register(defineTool({
     name: 'napcat_memory_space',

@@ -4,6 +4,25 @@ import type { ProviderRegistry } from './providers.js';
 import type { SubscriptionStore } from './subscriptions.js';
 import type { LogLevel, OneBotConnection } from './onebot.js';
 export interface ToolDeps {
+    /** 本群关系 + 性格倾向摘要 */
+    personaDigest?: (chatKey: string) => Promise<{
+        summary?: string;
+        people: string[];
+        style: string[];
+        glossary: string[];
+        preference: string[];
+        traits: string[];
+    }>;
+    /** 追加一条性格倾向，返回最新列表 */
+    personaTrait?: (chatKey: string, text: string) => Promise<string[]>;
+    /** 当前人物卡（只取展示用字段） */
+    personaCard?: () => {
+        name: string;
+        personality: string;
+        aliases?: string[];
+    };
+    /** 可用人物卡列表（内置 + persona 目录） */
+    personaCards?: () => string[];
     /** 会话 id → 当前 QQ 会话（省略 chat_id 时用） */
     keyForSession?: (sessionId: string) => string | undefined;
     maxImageBytes?: number;

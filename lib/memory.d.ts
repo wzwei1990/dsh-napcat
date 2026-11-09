@@ -144,6 +144,17 @@ export declare class MemoryStore {
     clearArchiveBatch(chatKey: string): Promise<void>;
     /** 生成人类可读的记忆快照 memory.md（便于直接翻看，不参与注入）。 */
     writeDigest(chatKey: string): Promise<void>;
+    /** 本群关系摘要（给人物卡注入用，少而精）。 */
+    digest(chatKey: string): Promise<{
+        summary?: string;
+        people: string[];
+        style: string[];
+        glossary: string[];
+        preference: string[];
+        traits: string[];
+    }>;
+    /** 追加一条性格倾向（同一句只记一次，最多保留 30 条）。 */
+    addTrait(chatKey: string, text: string): Promise<string[]>;
     /** 读当前滚动摘要（单一版本；旧版 summary.jsonl 兜底取最后一段）。 */
     readSummary(chatKey: string): Promise<{
         text: string;

@@ -60,8 +60,10 @@ export interface Config {
     workspacePath: string;
     /** 每个 QQ 会话是否用 workspacePath 下的独立子目录。 */
     perChatWorkspace: boolean;
-    /** 群/人性格：每行 group:<群号>=<人设> 或 private:<QQ>=<人设>。 */
-    personaOverrides: string;
+    /** 人物卡名字：内置 default / tsundere / gentle，或 persona 目录里的文件名。 */
+    personaName: string;
+    /** 人物卡（SillyTavern Character Card V2 JSON；非空时优先生效）。 */
+    personaCard: string;
     /** 会话挂载的 agent preset（留空=宿主默认）。 */
     agentPreset: string;
     /** 覆盖模型 provider（留空=宿主默认）。 */

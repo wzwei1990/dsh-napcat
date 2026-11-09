@@ -112,6 +112,15 @@ export function judgeSticker(signals: StickerSignals): StickerVerdict {
       return { sticker: true, reason: '小尺寸透明 PNG ' + String(w) + 'x' + String(h) + '（' + Math.round(bytes / 1024) + 'KB）' }
     }
   }
-  if (header?.format === 'jpeg') return { sticker: false, reason: 'JPEG（照片/截图）' }
+  // 小尺寸、近似方形的 JPEG 也可能是表情包（很多图转存后丢了透明通道）
+  if (header?.format === 'jpeg') {
+    const w = header.width ?? 0
+    const h = header.height ?? 0
+    const ratio = w > 0 && h > 0 ? w / h : 0
+    if (w > 0 && h > 0 && w <= 500 && h <= 500 && bytes > 0 && bytes <= 200 * 1024 && ratio >= 0.6 && ratio <= 1.7) {
+      return { sticker: true, reason: '小尺寸 JPEG ' + String(w) + 'x' + String(h) + '（' + Math.round(bytes / 1024) + 'KB）' }
+    }
+    return { sticker: false, reason: 'JPEG（照片/截图）' }
+  }
   return { sticker: false, reason: '未命中表情包特征' }
 }

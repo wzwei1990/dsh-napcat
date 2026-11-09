@@ -8,7 +8,7 @@
  * 重启后 create 失败即回退 resume，于是同一 QQ 会话自动续上上下文。
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, open } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, relative } from 'node:path'
@@ -35,11 +35,12 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Config } from './config.js'
 import { allowAccess, chatRefOf, isAdmin, sessionIdForChat, type ChatRef } from './chat.js'
 import { judgeSticker, readImageHeader } from './sticker.js'
-import { bumpImageFreq, imageKey } from './imagefreq.js'
+import { bumpImageFreq, imageKey, loadImageFreq } from './imagefreq.js'
+import { listCards, loadCard, renderPersona } from './persona.js'
 import { extractMediaLink, fetchLinkCard, renderLinkBlock } from './links.js'
 import { buildRefusalPrompt, cleanRefusal, detectDanger, type DangerHit } from './danger.js'
 import type { LogLevel, OneBotConnection } from './onebot.js'
-import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, stripKeyword, titleFrom, toText } from './text.js'
+import { findKeyword, mentions, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, stripKeyword, titleFrom, toText } from './text.js'
 import { MemoryStore } from './memory.js'
 import { GameWiki } from './gamewiki.js'
 import { BiliLink, extractBiliLink } from './bililink.js'
@@ -150,10 +151,10 @@ export class Bridge {
   private readonly bySession = new Map<string, string>()
   /** 归档/失效后换用新会话 id 的后缀（下次建会话时带上）。 */
   private readonly sessionSuffixes = new Map<string, string>()
-  /** sessionId → 该会话的人设文本（来自 personaOverrides）。 */
+  /** sessionId → 渲染好的人设块（同步注入 systemPrompt.context 用）。 */
   private readonly personaBySession = new Map<string, string>()
-  /** 解析后的人设表（chat key → 文本）。 */
-  private personas = parsePersonaOverrides('')
+  /** sessionId → 人设块最后一次生成时间（10 分钟缓存，避免每轮读盘）。 */
+  private readonly personaBuiltAt = new Map<string, number>()
   private sessionEventOff: (() => void) | undefined
   private stopped = false
   private mentionWarned = false
@@ -193,7 +194,7 @@ export class Bridge {
       log: opts.log,
     })
 
-    this.refreshPersonas()}
+    this.invalidatePersona()}
 
   start(): void {
     this.stopped = false
@@ -352,6 +353,8 @@ export class Bridge {
       if (name !== '') void cache.noteFace(ref.key, nick, name)
     }
     const saved: string[] = []
+    let stickerCount = 0
+    const inboxDir = join(cwd, 'napcat-inbox')
     for (const seg of images.slice(0, 3)) {
       const fileRef = String((seg.data as { file?: unknown }).file ?? '')
       if (fileRef === '') continue
@@ -360,8 +363,16 @@ export class Bridge {
         const url = info?.url
         if (typeof url !== 'string' || url === '') continue
         const hit = await cache.save({ url, chatKey: ref.key, nick, name: nameFromRef(fileRef, 'image.png') })
-        // 写成相对工作目录的路径，模型才能用 read_image 直接打开（只写文件名是打不开的）
-        if (hit !== undefined) saved.push(relative(cwd, hit.path).replace(/\\/g, '/'))
+        if (hit === undefined) continue
+        // 表情包只记标记、不记路径：历史里给它路径，模型就会去 read_image 然后描述画面
+        const summary = String((seg.data as { summary?: unknown } | undefined)?.summary ?? '')
+        const verdict = await this.stickerOfFile(hit.path, hit.bytes, summary, inboxDir)
+        if (verdict.sticker) {
+          stickerCount += 1
+        } else {
+          // 写成相对工作目录的路径，模型才能用 read_image 直接打开（只写文件名是打不开的）
+          saved.push(relative(cwd, hit.path).replace(/\\/g, '/'))
+        }
       } catch (error) {
         this.opts.log('debug', '图片缓存失败（已跳过）: ' + (error instanceof Error ? error.message : String(error)))
       }
@@ -398,8 +409,11 @@ export class Bridge {
         text = text.replace('[语音]', '[语音' + describeMedia(seg) + ']' + transcript)
       }
     }
-    if (saved.length === 0) return text
-    return text.replace(/\[图片\]/g, '') + ' [图片:' + saved.join(',') + ']'
+    if (saved.length === 0 && stickerCount === 0) return text
+    const notes: string[] = []
+    if (saved.length > 0) notes.push('[图片:' + saved.join(',') + ']')
+    if (stickerCount > 0) notes.push(new Array(stickerCount).fill('[表情包]').join(' '))
+    return text.replace(/\[图片\]/g, '') + ' ' + notes.join(' ')
   }
 
   // ── 主动发言（伪人模式）──
@@ -884,7 +898,7 @@ export class Bridge {
         : '【当前话题就是这张图：已经随本轮消息附上】\n'
           + '【硬要求】如果你决定说话，必须说出图里的具体东西（是谁/什么东西/在干什么），不要只评论他发了张图。\n'
       // 词表召回：命中就把"可能是哪个游戏 + 可查工具"交给模型，由它决定查不查
-      const gameHint = await this.gameWiki.hintFor(recent.slice(-3).join('\n'))
+      const gameHint = await this.gameWiki.hintFor(recent.slice(-3).join('\n'), chat.ref.key)
       const biliHint = await this.biliLink.blockFor(recent.slice(-3).join('\n'))
       await this.dispatch(chat,
         (biliHint === undefined ? '' : biliHint + '\n\n')
@@ -1445,7 +1459,19 @@ export class Bridge {
           }
         }
         if (names.length > 0) {
-          entry.text = entry.text.replace(/\[图片\]/g, '').trimStart() + ' [图片:' + names.join(',') + ']'
+          const photos: string[] = []
+          let stickers = 0
+          for (const name of names) {
+            const full = join(cacheCwd, name)
+            const size = statSync(full).size
+            const verdict = await this.stickerOfFile(full, size, undefined, join(cacheCwd, 'napcat-inbox'))
+            if (verdict.sticker) stickers += 1
+            else photos.push(name)
+          }
+          const parts: string[] = []
+          if (photos.length > 0) parts.push('[图片:' + photos.join(',') + ']')
+          if (stickers > 0) parts.push(new Array(stickers).fill('[表情包]').join(' '))
+          entry.text = entry.text.replace(/\[图片\]/g, '').trimStart() + ' ' + parts.join(' ')
         } else if (expired > 0) {
           entry.text = entry.text.replace(/\[图片\]/g, '[图片(已过期)]')
         }
@@ -1651,7 +1677,7 @@ export class Bridge {
       : '【群里刚发过 B 站视频】' + recentBili.title + '（' + recentBili.link + '）\n'
         + '- 如果这几句在聊它，直接用你知道的（弹幕/标题）接话；需要更多细节就 bili_read 那个链接。\n'
     // 词表召回：命中就把"可能是哪个游戏 + 可查工具"交给模型，由它决定查不查
-    const gameHint = await this.gameWiki.hintFor(textWithoutImageMarkers)
+    const gameHint = await this.gameWiki.hintFor(textWithoutImageMarkers, chat.ref.key)
     // B 站链接：解析弹幕/字幕，让模型"看过"再接话
     const biliHint = await this.biliLink.blockFor(textWithoutImageMarkers)
     const text = [biliHint ?? '', recentBiliHint, gameHint ?? '', memoryBlock, visualHint, linkHint, textWithoutImageMarkers, ...media.notes].filter(part => part !== '').join('\n\n')
@@ -1668,6 +1694,30 @@ export class Bridge {
   }
 
   /** 写一行诊断到 <会话cwd>/napcat-inbox/_image-debug.log（出问题时能自查，用户随时可删）。 */
+  /**
+   * 判断某个已落盘的图片是不是表情包（头部特征 + 群内频次）。
+   * 观察层（recent 记录）和当前消息（附件注入）共用，保证两处判定一致。
+   */
+  private async stickerOfFile(path: string, bytes: number, summary: string | undefined, inbox: string, bump = true): Promise<{ sticker: boolean; count: number; reason: string }> {
+    const header = await this.headerOfImage(path)
+    const verdict = judgeSticker({ summary, bytes, header })
+    let count = 0
+    try {
+      const head = await this.headOfImage(path, 64 * 1024)
+      if (head !== undefined) {
+        const key = imageKey(head, bytes)
+        // 观察层已经在 prepareRecentText 里计过数；这里只读，避免同一条消息计数翻倍
+        count = bump ? await bumpImageFreq(inbox, key, bytes) : ((await loadImageFreq(inbox))[key]?.count ?? 0)
+      }
+    } catch {
+      // 频次统计失败不影响判定
+    }
+    if (!verdict.sticker && count >= 2 && bytes <= 2 * 1024 * 1024) {
+      return { sticker: true, count, reason: "群内高频图 ×" + String(count) }
+    }
+    return { sticker: verdict.sticker, count, reason: verdict.reason }
+  }
+
   /** 读图片前 N 字节（频次指纹用）。 */
   private async headOfImage(path: string, bytes: number): Promise<Buffer | undefined> {
     try {
@@ -1899,28 +1949,9 @@ export class Bridge {
           const url = info?.url
           if (url === undefined || url === '') throw new Error('get_image 没有返回 url')
           const saved = await downloadToFile(url, inbox, nameFromRef(fileRef, 'image.png'), DEFAULT_MAX_IMAGE_BYTES)
-          const header = await this.headerOfImage(saved.path)
-          const baseVerdict = judgeSticker({
-            segmentType: seg.type,
-            summary: String((seg.data as { summary?: unknown } | undefined)?.summary ?? ''),
-            fileName: fileRef,
-            bytes: saved.bytes,
-            header,
-          })
-          // 群友反复发的同一张图，大概率是表情包（JPEG 表情包靠格式认不出来）
-          let verdict = baseVerdict
-          let seenCount = 0
-          try {
-            const head = await this.headOfImage(saved.path, 64 * 1024)
-            if (head !== undefined) {
-              seenCount = await bumpImageFreq(inbox, imageKey(head, saved.bytes), saved.bytes)
-              if (!verdict.sticker && seenCount >= 2 && saved.bytes <= 2 * 1024 * 1024) {
-                verdict = { sticker: true, reason: '群内高频图 ×' + String(seenCount) }
-              }
-            }
-          } catch (error) {
-            this.debugLog(cwd, '图片频次统计失败: ' + describe(error))
-          }
+          const summary = String((seg.data as { summary?: unknown } | undefined)?.summary ?? '')
+          const verdict = await this.stickerOfFile(saved.path, saved.bytes, summary, inbox, false)
+          const seenCount = verdict.count
           // 表情包照样登记成附件（模型看得懂梗，只是提示词里只许接情绪、不许描述画面）
           const admitted = await this.admitImage(cwd, saved.path, nameFromRef(fileRef, 'image'))
           for (const block of admitted.blocks) blocks.push(block)
@@ -1928,7 +1959,7 @@ export class Bridge {
           const attached = admitted.blocks.length > 0
           this.opts.log('info', '收到图片 → ' + saved.path + ' (' + Math.round(saved.bytes / 1024) + 'KB, 第' + String(seenCount + 1) + '次) ' + (verdict.sticker ? '判为表情包: ' + verdict.reason : '普通图'))
           if (verdict.sticker) {
-            notes.push('[表情包]（群友的情绪表达：只用来判断情绪/语气，用匹配的语气接话；不要描述画面、不要用 read_image 再看，也别提"这张图/表情包"）')
+            notes.push('[表情包]（群友的情绪表达：这张图已经随消息发给你了，直接按情绪接一句就行；**不要描述画面**、不要念图里的字，也不用再 read_image 去看它）')
           } else {
             // 路径注释永远保留：无视觉模型只会拿到宿主的占位文本，路径是它们唯一的抓手；
             // 视觉模型另外还能直接拿到 image block。
@@ -2238,12 +2269,8 @@ export class Bridge {
 
     this.chats.set(ref.key, state)
     this.bySession.set(String(handle.agent.session.id), ref.key)
-    // 新会话也要立刻套用群/人设（否则只有"保存设置"时才会补上）
-    {
-      const persona = this.personas.get(ref.key)
-      if (persona !== undefined && persona !== '') this.personaBySession.set(String(handle.agent.session.id), persona)
-      else this.personaBySession.delete(String(handle.agent.session.id))
-    }
+    // 新会话立刻生成人设块（人物卡 + 本群关系 + 性格倾向）
+    await this.buildPersona(String(handle.agent.session.id), ref.key)
     // 侧边栏工作区需要显式挂载会话（否则显示未分组）
     await this.attachToWorkspace(cwd, workspaceTitle(ref), handle.agent.session.id)
     this.opts.log('info', '会话就绪: ' + ref.key + ' → ' + String(handle.agent.session.id) + ' (cwd=' + cwd + ')')
@@ -2266,25 +2293,84 @@ export class Bridge {
       return false
     }
   }
-  /** 重新解析 personaOverrides（配置热更新时调用）。 */
-  refreshPersonas(): void {
-    this.personas = parsePersonaOverrides(this.opts.config.personaOverrides)
-    for (const [sessionId, chatKey] of this.bySession) {
-      const text = this.personas.get(chatKey)
-      if (text === undefined || text === '') this.personaBySession.delete(sessionId)
-      else this.personaBySession.set(sessionId, text)
+  /** 人物卡目录：~/.dsh/dsh-napcat/persona（放 <名字>.json 就能切）。 */
+  private personaDir(): string {
+    return join(homedir(), '.dsh', 'dsh-napcat', 'persona')
+  }
+
+  /** 当前人物卡：内联 JSON > persona/<name>.json > 内置卡 > 默认卡。 */
+  private currentPersonaCard(): ReturnType<typeof loadCard> {
+    return loadCard({
+      name: this.opts.config.personaName,
+      inline: this.opts.config.personaCard,
+      dir: this.personaDir(),
+      readFile: (file: string) => readFileSync(file, 'utf8'),
+      exists: (file: string) => existsSync(file),
+      join: (...parts: string[]) => join(...parts),
+    })
+  }
+
+  /** 工具用：本群关系摘要（含性格倾向）。 */
+  async personaDigest(chatKey: string): Promise<{ summary?: string; people: string[]; style: string[]; glossary: string[]; preference: string[]; traits: string[] }> {
+    return await this.mem.digest(chatKey)
+  }
+
+  /** 工具用：追加一条性格倾向。 */
+  async personaTrait(chatKey: string, text: string): Promise<string[]> {
+    const traits = await this.mem.addTrait(chatKey, text)
+    // 立刻刷新本群所有人设缓存（下一轮就生效）
+    for (const [sessionId, key] of this.bySession) {
+      if (key === chatKey) await this.buildPersona(sessionId, key)
+    }
+    return traits
+  }
+
+  /** 工具用：当前人物卡（展示字段）。 */
+  personaCardInfo(): { name: string; personality: string; aliases: string[] } {
+    const card = this.currentPersonaCard()
+    return { name: card.name, personality: card.personality, aliases: card.aliases ?? [] }
+  }
+
+  /** 工具用：列出可用人物卡（内置 + persona 目录）。 */
+  personaCards(): string[] {
+    let entries: string[] = []
+    try {
+      entries = readdirSync(this.personaDir())
+    } catch {
+      entries = []
+    }
+    return listCards(entries)
+  }
+
+  /** 配置热更新：丢掉所有人设缓存，下一轮重建。 */
+  invalidatePersona(): void {
+    this.personaBySession.clear()
+    this.personaBuiltAt.clear()
+  }
+
+  /** 生成某个会话的人设块并缓存（人物卡 → 本群关系 → 性格倾向）。 */
+  private async buildPersona(sessionId: string, chatKey: string): Promise<void> {
+    try {
+      const digest = await this.mem.digest(chatKey)
+      this.personaBySession.set(sessionId, renderPersona(this.currentPersonaCard(), digest))
+      this.personaBuiltAt.set(sessionId, Date.now())
+    } catch (error) {
+      this.opts.log('debug', '生成人设块失败: ' + describe(error))
     }
   }
 
-  /** systemPrompt.context 的取值函数：按 assembly 里的 sessionId 找该会话的人设。 */
+  /** 缓存过期（10 分钟）就重建；在 dispatch 里调用，不阻塞 systemPrompt 的同步取值。 */
+  private async refreshPersonaIfStale(sessionId: string, chatKey: string): Promise<void> {
+    const built = this.personaBuiltAt.get(sessionId) ?? 0
+    if (Date.now() - built < 10 * 60_000 && this.personaBySession.has(sessionId)) return
+    await this.buildPersona(sessionId, chatKey)
+  }
+
+  /** systemPrompt.context 的取值函数：按 assembly 里的 sessionId 取缓存好的人设块。 */
   personaText(assembly: { agent?: { session?: { id?: unknown } } } | undefined): string {
     const id = assembly?.agent?.session?.id
     if (id === undefined) return ''
-    const persona = this.personaBySession.get(String(id)) ?? ''
-    if (persona === '') return ''
-    // 人设只控制语气/称呼/风格：不许复述设定本身，也不许拿它当自我介绍
-    return '（角色设定：只用于把握语气、称呼与说话风格。不要在回复里复述、引用或解释这份设定，不要自称"我是…团宠/助手"之类；用户问"你是谁"时用一两句自然的话回答即可。）\n'
-      + persona
+    return this.personaBySession.get(String(id)) ?? ''
   }
   private async attachToWorkspace(cwd: string, title: string, sessionId: unknown): Promise<void> {
     try {
@@ -2347,6 +2433,7 @@ export class Bridge {
 
   private dispatch(chat: ChatState, text: string, blocks: ContentBlock[] = [], parts: Array<Record<string, unknown>> = [], kind: 'reply' | 'proactive' = 'reply'): void {
     this.debugLog(chat.cwd, 'dispatch 进入 ref=' + chat.ref.key + ' text=' + text.length + '字 blocks=' + blocks.length + ' parts=' + parts.length)
+    void this.refreshPersonaIfStale(String(chat.agent.session.id), chat.ref.key)
     // 本轮还在跑：攒着，等 turn/end 合并成一条再投（否则会变成 DSH 里的「N 条排队消息」）
     if (chat.busy === true) {
       if (kind === 'proactive') {
@@ -2770,6 +2857,15 @@ export class Bridge {
       this.opts.log('info', '已发送到 QQ: ' + chat.ref.key + '（' + parts.length + ' 段）')
       if (interval > 0 && index < groups.length - 1) {
         await new Promise(resolve => setTimeout(resolve, interval))
+      }
+    }
+    // 记录自己说的话（否则 recent 缓冲里只有群友消息，模型看不到上一条自己回了什么）
+    if (this.opts.config.memoryEnabled && text.trim() !== '') {
+      try {
+        const nick = this.currentPersonaCard().name
+        await this.mem.appendRecent(chat.ref.key, { nick, text: text.trim(), at: Date.now() })
+      } catch (error) {
+        this.opts.log('debug', '记录自己的发言失败: ' + describe(error))
       }
     }
     // 图片/表情包单独发（每张一条），图自己会说话

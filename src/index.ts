@@ -90,6 +90,10 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
     rememberSpace: (chatKey, spaceId) => bridge.saveMemorySpace(chatKey, spaceId),
   memeSearch: (query, limit) => bridge.searchMemeForTool(query, limit),
   memeCatalog: () => bridge.memeCatalogForTool(),
+  personaDigest: (chatKey: string) => bridge.personaDigest(chatKey),
+  personaTrait: (chatKey: string, text: string) => bridge.personaTrait(chatKey, text),
+  personaCard: () => bridge.personaCardInfo(),
+  personaCards: () => bridge.personaCards(),
   })
 
   // 设置页「发一条测试语音」：给指定/最近的会话发一条语音（用户在 QQ 里听得到才算通）
@@ -145,7 +149,7 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
       if (JSON.stringify(next) === JSON.stringify(config)) return
       const wasEnabled = config.enabled
       Object.assign(config, next)
-      bridge.refreshPersonas()
+      bridge.invalidatePersona()
       if (next.enabled !== wasEnabled) {
         if (next.enabled) {
           log('info', '开关已打开：连接 NapCat')
