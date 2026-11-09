@@ -2302,7 +2302,6 @@ export class Bridge {
   private currentPersonaCard(): ReturnType<typeof loadCard> {
     return loadCard({
       name: this.opts.config.personaName,
-      inline: this.opts.config.personaCard,
       dir: this.personaDir(),
       readFile: (file: string) => readFileSync(file, 'utf8'),
       exists: (file: string) => existsSync(file),

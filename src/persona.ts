@@ -86,11 +86,6 @@ export function parseCharacterCard(json: string): CharacterCard | undefined {
   }
 }
 
-/** 配置里的卡文本 → 卡（空/坏 JSON 都用内置卡）。 */
-export function cardFromConfig(text: string): CharacterCard {
-  return parseCharacterCard(text) ?? DEFAULT_CARD
-}
-
 function short(lines: string, max: number): string {
   const text = lines.replace(/\s+/g, ' ').trim()
   return text.length > max ? text.slice(0, max) + '…' : text
@@ -186,15 +181,9 @@ export function listCards(dirEntries: readonly string[]): string[] {
 }
 
 /**
- * 取当前人物卡：
- *   ① 配置里内联 JSON 非空 → 用它（最高优先级）
- *   ② persona/<name>.json 存在 → 读文件
- *   ③ 内置卡 BUILTIN_CARDS[name]
- *   ④ 兜底 DEFAULT_CARD
+ * 取当前人物卡：persona/<name>.json → 内置卡 → 默认卡。
  */
-export function loadCard(options: { name: string; inline: string; dir: string; readFile: (path: string) => string; exists: (path: string) => boolean; join: (...parts: string[]) => string }): CharacterCard {
-  const inline = options.inline.trim()
-  if (inline !== '') return parseCharacterCard(inline) ?? DEFAULT_CARD
+export function loadCard(options: { name: string; dir: string; readFile: (path: string) => string; exists: (path: string) => boolean; join: (...parts: string[]) => string }): CharacterCard {
   const name = options.name.trim() === '' ? 'default' : options.name.trim()
   try {
     const file = options.join(options.dir, name + '.json')

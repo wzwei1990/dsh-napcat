@@ -62,8 +62,6 @@ export interface Config {
     perChatWorkspace: boolean;
     /** 人物卡名字：内置 default / tsundere / gentle，或 persona 目录里的文件名。 */
     personaName: string;
-    /** 人物卡（SillyTavern Character Card V2 JSON；非空时优先生效）。 */
-    personaCard: string;
     /** 会话挂载的 agent preset（留空=宿主默认）。 */
     agentPreset: string;
     /** 覆盖模型 provider（留空=宿主默认）。 */

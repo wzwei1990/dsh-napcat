@@ -29,8 +29,6 @@ export declare const DEFAULT_CARD: CharacterCard;
  * 解析失败返回 undefined（调用方回落到内置卡）。
  */
 export declare function parseCharacterCard(json: string): CharacterCard | undefined;
-/** 配置里的卡文本 → 卡（空/坏 JSON 都用内置卡）。 */
-export declare function cardFromConfig(text: string): CharacterCard;
 /** 只取示例对话里的前 N 组（够定语气，不占太多上下文）。 */
 export declare function exampleLines(example: string, maxTurns?: number): string[];
 export interface PersonaDigest {
@@ -51,15 +49,10 @@ export declare const BUILTIN_CARDS: Record<string, CharacterCard>;
 /** 列出可用卡片：内置 + persona 目录下的文件名（不含 .json）。 */
 export declare function listCards(dirEntries: readonly string[]): string[];
 /**
- * 取当前人物卡：
- *   ① 配置里内联 JSON 非空 → 用它（最高优先级）
- *   ② persona/<name>.json 存在 → 读文件
- *   ③ 内置卡 BUILTIN_CARDS[name]
- *   ④ 兜底 DEFAULT_CARD
+ * 取当前人物卡：persona/<name>.json → 内置卡 → 默认卡。
  */
 export declare function loadCard(options: {
     name: string;
-    inline: string;
     dir: string;
     readFile: (path: string) => string;
     exists: (path: string) => boolean;

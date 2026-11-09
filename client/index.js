@@ -77,8 +77,7 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { section: '会话与模型' },
         { key: 'workspacePath', label: '会话工作区路径（留空=宿主 cwd）', kind: 'text' },
         { key: 'perChatWorkspace', label: '每个会话用独立子目录（群聊始终独立；私聊按此开关，目录为 workspacePath/napcat/<群号或QQ>）', kind: 'boolean' },
-        { key: 'personaName', label: '用哪张人物卡', kind: 'select', options: [['default', '大肥鱼（也叫小灯）'], ['tsundere', '毒舌同事'], ['gentle', '温柔姐姐'], ['custom', '自定义（用下面人物卡文本框的 JSON）']], hint: '三张内置卡已写到 ~/.dsh/dsh-napcat/persona/{default,tsundere,gentle}.json，可以直接编辑；新增的 <名字>.json 也能用（配置里 personaName 填文件名）。选「自定义」则用下面文本框里的 JSON。' },
-        { key: 'personaCard', label: '人物卡内容（选「自定义」时填；留空=用上面选的卡）', kind: 'textarea', placeholder: '{"name":"大肥鱼","aliases":["小灯"],"description":"群里的团宠兼助手","personality":"幽默风趣、嘴硬心软","mes_example":"群友：在吗\n大肥鱼：在，鱼还没睡","post_history_instructions":"回复简短精炼，不超过两句"}' },
+        { key: 'personaName', label: '人物卡', kind: 'persona', hint: '选一张卡编辑，保存会写入 ~/.dsh/dsh-napcat/persona/<名字>.json；「另存为新卡」可以直接新增。' },
         { key: 'agentPreset', label: 'Agent 预设（留空=宿主默认）', kind: 'text' },
         { key: 'provider', label: '模型 provider（留空=宿主默认）', kind: 'text' },
         { key: 'model', label: '模型 id（留空=宿主默认）', kind: 'text' },
@@ -279,6 +278,88 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         return raw.split(/[,，\s]+/).map((item) => item.trim()).filter((item) => item !== '')
       }
 
+      /** 人物卡编辑器：下拉选卡 + 文本框显示/编辑 + 保存/另存为。 */
+      function PersonaEditor(props) {
+        const [cards, setCards] = react.useState([])
+        const [name, setName] = react.useState(typeof props.value === 'string' && props.value !== '' ? props.value : 'default')
+        const [text, setText] = react.useState('')
+        const [status, setStatus] = react.useState('')
+        const loadCards = () => {
+          fetch('/dsh-napcat/api/persona/cards', { cache: 'no-store' })
+            .then(response => response.json())
+            .then(payload => setCards(Array.isArray(payload.cards) ? payload.cards : []))
+            .catch(() => setStatus('读取人物卡列表失败'))
+        }
+        const loadCard = (target) => {
+          fetch('/dsh-napcat/api/persona/card?name=' + encodeURIComponent(target), { cache: 'no-store' })
+            .then(response => response.json())
+            .then(payload => {
+              if (payload && payload.ok && payload.card) setText(JSON.stringify(payload.card, null, 2))
+              else setStatus('读不到这张卡：' + String(payload && payload.error ? payload.error : target))
+            })
+            .catch(() => setStatus('读取人物卡内容失败'))
+        }
+        react.useEffect(() => { loadCards(); loadCard(name) }, [])
+        const choose = (target) => {
+          setName(target)
+          props.onChange('personaName', target)
+          loadCard(target)
+        }
+        const save = (target) => {
+          let card
+          try {
+            card = JSON.parse(text)
+          } catch (error) {
+            setStatus('JSON 不合法：' + String(error && error.message ? error.message : error))
+            return
+          }
+          fetch('/dsh-napcat/api/persona/save', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ name: target, card }),
+          })
+            .then(response => response.json())
+            .then(payload => {
+              if (payload && payload.ok) {
+                setStatus('已保存：' + target)
+                loadCards()
+                if (target !== name) choose(target)
+              } else {
+                setStatus('保存失败：' + String(payload && payload.error ? payload.error : '未知错误'))
+              }
+            })
+            .catch(error => setStatus('保存失败：' + String(error && error.message ? error.message : error)))
+        }
+        const saveAs = () => {
+          const input = window.prompt('新人物卡名字（字母/数字/下划线/横线/中文）', '')
+          if (input === null) return
+          const target = String(input).trim()
+          if (target === '') return
+          save(target)
+        }
+        return react.createElement('div', { style: { display: 'grid', gap: '8px' } },
+          react.createElement('label', { style: style.label }, props.label === undefined ? '人物卡' : props.label),
+          react.createElement('select', {
+            id: NS + '-personaName',
+            style: style.input,
+            value: name,
+            onChange: event => choose(event.target.value),
+          }, cards.map(card => react.createElement('option', { key: card, value: card }, card))),
+          react.createElement('textarea', {
+            style: Object.assign({}, style.input, { minHeight: '180px', fontFamily: 'monospace' }),
+            value: text,
+            onChange: event => setText(event.target.value),
+          }),
+          react.createElement('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
+            react.createElement('button', { style: style.primary, type: 'button', onClick: () => save(name) }, '保存到这张卡'),
+            react.createElement('button', { style: style.primary, type: 'button', onClick: saveAs }, '另存为新卡'),
+            react.createElement('button', { style: style.primary, type: 'button', onClick: () => { loadCards(); loadCard(name) } }, '刷新'),
+          ),
+          status === '' ? null : react.createElement('p', { style: style.hint }, status),
+          props.hint === undefined ? null : react.createElement('p', { style: style.hint }, props.hint),
+        )
+      }
+
       function renderField(field, value, onChange) {
         const id = NS + '-' + field.key
         if (field.kind === 'button') {
@@ -318,6 +399,9 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
               onChange: (event) => onChange(field.key, event.target.checked),
             }),
             react.createElement('label', { htmlFor: id }, field.label))
+        }
+        if (field.kind === 'persona') {
+          return react.createElement(PersonaEditor, { key: field.key, value, onChange, hint: field.hint })
         }
         let control
         if (field.kind === 'select') {

@@ -17,6 +17,7 @@ import { Config, resolveConfig } from './config.js'
 import type { Config as ConfigShape } from './config.js'
 import { OneBotConnection, type LogLevel } from './onebot.js'
 import { seedPersonaDir } from './persona.js'
+import { listCardsInDir, readCardInDir, validCardName, writeCardInDir } from './personacard.js'
 import { registerTools } from './tools.js'
 import { SubscriptionStore } from './subscriptions.js'
 import { ProviderRegistry } from './providers.js'
@@ -116,6 +117,43 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
       path: '/dsh-napcat/api',
       handler: (req, res) => {
         const url = new URL(req.url ?? '/', 'http://localhost')
+        const reply = (code: number, body: unknown): void => {
+          res.writeHead?.(code, { 'content-type': 'application/json; charset=utf-8' })
+          res.end?.(JSON.stringify(body))
+        }
+        const personaDir = join(homedir(), '.dsh', 'dsh-napcat', 'persona')
+        if (url.pathname === '/dsh-napcat/api/persona/cards') {
+          reply(200, { ok: true, cards: listCardsInDir(personaDir) })
+          return
+        }
+        if (url.pathname === '/dsh-napcat/api/persona/card') {
+          const name = url.searchParams.get('name') ?? ''
+          const card = readCardInDir(personaDir, name)
+          reply(card === undefined ? 404 : 200, card === undefined ? { ok: false, error: '没有这张卡: ' + name } : { ok: true, name, card })
+          return
+        }
+        if (url.pathname === '/dsh-napcat/api/persona/save') {
+          // POST JSON { name, card }；名字非法/JSON 坏都直接拒绝
+          let body = ''
+          const stream = req as unknown as { on?: (event: string, cb: (chunk?: unknown) => void) => void }
+          stream.on?.('data', (chunk?: unknown) => { body += String(chunk ?? '') })
+          stream.on?.('end', () => {
+            try {
+              const parsed = JSON.parse(body) as { name?: unknown; card?: unknown }
+              const name = typeof parsed.name === 'string' ? parsed.name.trim() : ''
+              if (!validCardName(name)) {
+                reply(400, { ok: false, error: '名字只能包含字母/数字/下划线/横线/中文，1~40 字' })
+                return
+              }
+              const result = writeCardInDir(personaDir, name, parsed.card)
+              bridge.invalidatePersona()
+              reply(result.ok ? 200 : 400, result)
+            } catch (error) {
+              reply(400, { ok: false, error: '请求体不是合法 JSON: ' + (error instanceof Error ? error.message : String(error)) })
+            }
+          })
+          return
+        }
         if (url.pathname !== '/dsh-napcat/api/test-voice') {
           res.writeHead?.(404, { 'content-type': 'text/plain; charset=utf-8' })
           res.end?.('not found')

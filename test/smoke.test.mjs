@@ -16,7 +16,8 @@ import { judgeSticker, readImageHeader } from '../lib/sticker.js'
 import { pruneInbox } from '../lib/media.js'
 import { buildHintBlock, looksLikeHelpRequest } from '../lib/gamewiki.js'
 import { bumpImageFreq, imageKey, loadImageFreq } from '../lib/imagefreq.js'
-import { DEFAULT_CARD, cardFromConfig, loadCard, parseCharacterCard, renderPersona, seedPersonaDir } from '../lib/persona.js'
+import { DEFAULT_CARD, loadCard, parseCharacterCard, renderPersona, seedPersonaDir } from '../lib/persona.js'
+import { listCardsInDir, readCardInDir, validCardName, writeCardInDir } from '../lib/personacard.js'
 import { extractMediaLink, lyricPreview, neteaseSongId, parseOpenGraph, renderLinkBlock } from '../lib/links.js'
 
 const config = {
@@ -1185,7 +1186,7 @@ test('pushQueued：同文本去重、超 6 条丢最旧', () => {
 test('busy 期间不投递、turn/end 后合并成一条', async () => {
   const calls = []
   const b = Object.create(Bridge.prototype)
-  b.opts = { log: () => {}, ctx: {}, config: { personaCard: '' }, conn: {} }
+  b.opts = { log: () => {}, ctx: {}, config: {}, conn: {} }
   b.mem = { digest: async () => ({ people: [], style: [], glossary: [], preference: [], traits: [] }) }
   b.personaBySession = new Map()
   b.personaBuiltAt = new Map()
@@ -1441,14 +1442,9 @@ test('parseCharacterCard：兼容 ST V2 包裹与裸字段', () => {
   assert.equal(parseCharacterCard('not json'), undefined)
 })
 
-test('cardFromConfig：坏 JSON 回落内置卡', () => {
-  assert.equal(cardFromConfig('').name, DEFAULT_CARD.name)
-  assert.equal(cardFromConfig('{oops').name, DEFAULT_CARD.name)
-  assert.equal(cardFromConfig('{"name":"自定义"}').name, '自定义')
-})
 
 test('renderPersona：包含身份/示例/关系/性格倾向，且带"不要复述"约束', () => {
-  const custom = cardFromConfig(JSON.stringify({
+  const custom = parseCharacterCard(JSON.stringify({
     name: '小灯',
     personality: '活泼',
     mes_example: '群友：在吗\n小灯：在的',
@@ -1490,7 +1486,7 @@ test('人物卡别名：数组 / nickname / 渲染时两个名字都认', () => 
   assert.deepEqual(card.aliases, ['小灯'])
   const viaNick = parseCharacterCard(JSON.stringify({ name: 'A', nickname: '小A' }))
   assert.deepEqual(viaNick.aliases, ['小A'])
-  const text = renderPersona(cardFromConfig(JSON.stringify({ name: '大肥鱼', aliases: ['小灯'] })), {})
+  const text = renderPersona(parseCharacterCard(JSON.stringify({ name: '大肥鱼', aliases: ['小灯'] })), {})
   assert.ok(text.includes('大肥鱼'))
   assert.ok(text.includes('小灯'))
 })
@@ -1499,13 +1495,11 @@ test('loadCard：内联 > 文件 > 内置 > 默认', () => {
   const files = { '/p/default.json': JSON.stringify({ name: '文件卡' }) }
   const opts = {
     name: 'default',
-    inline: '',
     dir: '/p',
     readFile: (f) => files[f],
     exists: (f) => files[f] !== undefined,
     join: (...parts) => parts.join('/'),
   }
-  assert.equal(loadCard({ ...opts, inline: JSON.stringify({ name: '内联卡' }) }).name, '内联卡')
   assert.equal(loadCard(opts).name, '文件卡')
   assert.equal(loadCard({ ...opts, name: 'tsundere' }).name, '毒舌同事')
   assert.equal(loadCard({ ...opts, name: '不存在的' }).name, DEFAULT_CARD.name)
@@ -1562,4 +1556,30 @@ test('seedPersonaDir：写入三张内置卡、不覆盖已存在的文件', asy
   assert.equal(again.length, 0, '已存在的文件不覆盖')
   const after = JSON.parse(await readFile(join(dir, 'default.json'), 'utf8'))
   assert.equal(after.name, '我改过的卡')
+})
+
+// ── 人物卡文件读写 ──────────────────────────────────────────────────
+
+test('validCardName 拒绝路径穿越与空名', () => {
+  assert.equal(validCardName('default'), true)
+  assert.equal(validCardName('小灯'), true)
+  assert.equal(validCardName('my-card_2'), true)
+  assert.equal(validCardName(''), false)
+  assert.equal(validCardName('..'), false)
+  assert.equal(validCardName('../etc/passwd'), false)
+  assert.equal(validCardName('a/b'), false)
+})
+
+test('writeCardInDir / readCardInDir / listCardsInDir 往返', async () => {
+  const { mkdtemp } = await import('node:fs/promises')
+  const dir = await mkdtemp(join(tmpdir(), 'persona-card-'))
+  const card = { name: '小灯', aliases: ['大肥鱼'], personality: '幽默' }
+  const saved = writeCardInDir(dir, '小灯', card)
+  assert.equal(saved.ok, true)
+  assert.deepEqual(readCardInDir(dir, '小灯'), card)
+  assert.deepEqual(listCardsInDir(dir), ['小灯'])
+  // 非法名字拒绝
+  assert.equal(writeCardInDir(dir, '../x', card).ok, false)
+  // 不存在的卡返回 undefined
+  assert.equal(readCardInDir(dir, '不存在'), undefined)
 })
