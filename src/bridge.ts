@@ -9,7 +9,7 @@
  */
 
 import { existsSync } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, open } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, relative } from 'node:path'
 
@@ -34,6 +34,7 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 
 import type { Config } from './config.js'
 import { allowAccess, chatRefOf, isAdmin, sessionIdForChat, type ChatRef } from './chat.js'
+import { judgeSticker, readImageHeader } from './sticker.js'
 import { buildRefusalPrompt, cleanRefusal, detectDanger, type DangerHit } from './danger.js'
 import type { LogLevel, OneBotConnection } from './onebot.js'
 import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, stripKeyword, titleFrom, toText } from './text.js'
@@ -50,7 +51,7 @@ import { faceFor } from './faces.js'
 import { defaultMemeDirs, MemeLibrary, readMemeSettings } from './meme.js'
 import { localToBase64Url } from './media.js'
 import { decide, FRESH_SECONDS, HOT_WINDOW_MS, inQuietHours, maxPerHourOf, newChatState, parseQuietHours, pruneSentAt, scoreHeat, windowMsOf, type ChatProactiveState, type RecentMessage } from './proactive.js'
-import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, base64UrlToBuffer, downloadToFile, ensureInbox, imageMediaType, nameFromRef } from './media.js'
+import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, base64UrlToBuffer, downloadToFile, ensureInbox, imageMediaType, nameFromRef, pruneInbox } from './media.js'
 import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
 
@@ -58,6 +59,22 @@ import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
 type HostContext = Context & { agents: AgentRegistry }
 
 /** 投递后多久没收到 turn/start 就判定会话失效。 */
+
+/** 一次合并最多几条 / 最长多少字（防刷屏把上下文撑爆）。 */
+/** busy 兜底：超过这么久还没收到 turn/end，就当这一轮丢了，强制解除。 */
+const BUSY_MAX_MS = 15 * 60 * 1000
+
+const MERGE_MAX_ITEMS = 6
+const MERGE_MAX_CHARS = 4000
+
+/** busy 期间攒下来的一条待投递消息。 */
+interface QueuedDispatch {
+  at: number
+  text: string
+  blocks: ContentBlock[]
+  parts: Array<Record<string, unknown>>
+  kind: 'reply' | 'proactive'
+}
 
 interface ChatState {
   ref: ChatRef
@@ -89,6 +106,14 @@ interface ChatState {
   lastText?: string
   /** 这条消息是否已经重试过一次。 */
   retried?: boolean
+  /** 是否已经「同一会话重投」过一次（看门狗第二轮用）。 */
+  retriedAgain?: boolean
+  /** 当前是否有一轮在跑（dispatch 时乐观置位，turn/end 解除）。 */
+  busy?: boolean
+  /** busy 从什么时候开始（兜底超时用）。 */
+  busySince?: number
+  /** busy 期间攒下的投递（turn/end 后合并成一条，避免 DSH 侧排 N 条）。 */
+  queued?: QueuedDispatch[]
 }
 
 export interface BridgeOptions {
@@ -260,7 +285,8 @@ export class Bridge {
   /** 每个 cwd 一个图片缓存（配额/清理按 cwd 独立）。 */
   private readonly imageCaches = new Map<string, ImageCache>()
   /** 已经清理过过期目录的 cwd。 */
-  private readonly imageCacheSwept = new Set<string>()
+  /** 每个 cwd 最近一次清理时间（每小时最多扫一次）。 */
+  private readonly imageCacheSweepAt = new Map<string, number>()
   /** 危险请求拒绝提示的节流时间（每会话 10 分钟一次，避免刷屏）。 */
   private readonly dangerNoticeAt = new Map<string, number>()
 
@@ -275,10 +301,11 @@ export class Bridge {
       log: this.opts.log,
     })
     this.imageCaches.set(cwd, cache)
-    if (!this.imageCacheSwept.has(cwd)) {
-      this.imageCacheSwept.add(cwd)
+    const lastSweep = this.imageCacheSweepAt.get(cwd) ?? 0
+    if (Date.now() - lastSweep > 3_600_000) {
+      this.imageCacheSweepAt.set(cwd, Date.now())
       void cache.sweep().then(removed => {
-        if (removed > 0) this.opts.log('info', '清理过期图片缓存目录 ' + removed + ' 个: ' + cwd)
+        if (removed > 0) this.opts.log('info', '清理过期图片/收件箱文件 ' + removed + ' 个: ' + cwd)
       })
     }
     return cache
@@ -1629,6 +1656,22 @@ export class Bridge {
   }
 
   /** 写一行诊断到 <会话cwd>/napcat-inbox/_image-debug.log（出问题时能自查，用户随时可删）。 */
+  /** 读图片前 512 字节解析头部（表情包判定用，失败就当普通图）。 */
+  private async headerOfImage(path: string): Promise<ReturnType<typeof readImageHeader> | undefined> {
+    try {
+      const handle = await open(path, 'r')
+      try {
+        const buffer = Buffer.alloc(512)
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+        return readImageHeader(buffer.subarray(0, bytesRead))
+      } finally {
+        await handle.close()
+      }
+    } catch {
+      return undefined
+    }
+  }
+
   private debugLog(cwd: string | undefined, note: string): void {
     try {
       const dir = cwd ?? join(normalizePath(this.opts.config.workspacePath) || process.cwd(), 'napcat')
@@ -1788,7 +1831,7 @@ export class Bridge {
   }
 
   private async resolveInboundMedia(msg: ObMessageEvent, chat: ChatState): Promise<{ notes: string[]; blocks: ContentBlock[]; parts: Array<Record<string, unknown>> }> {
-    const media = segmentsOf(msg.message).filter(seg => seg.type === 'image' || seg.type === 'file' || seg.type === 'video' || seg.type === 'record')
+    const media = segmentsOf(msg.message).filter(seg => seg.type === 'image' || seg.type === 'mface' || seg.type === 'file' || seg.type === 'video' || seg.type === 'record')
     // 引用回复：被引用的那条消息里的图/文件不在当前 segments 里，用 get_msg 取回来
     const replySeg = segmentsOf(msg.message).find(seg => seg.type === 'reply')
     const replyId = replySeg === undefined ? '' : String((replySeg.data as { id?: unknown } | undefined)?.id ?? '')
@@ -1819,20 +1862,36 @@ export class Bridge {
       const data = (seg.data ?? {}) as { file?: unknown }
       const fileRef = String(data.file ?? '')
       try {
+        if (seg.type === 'mface') {
+          notes.push('[表情包]（群友的情绪表达：只用来判断情绪/语气，不要描述画面）')
+          continue
+        }
         if (seg.type === 'image') {
           const info = await this.opts.conn.call<{ url?: string; file?: string }>('get_image', { file: fileRef })
           const url = info?.url
           if (url === undefined || url === '') throw new Error('get_image 没有返回 url')
           const saved = await downloadToFile(url, inbox, nameFromRef(fileRef, 'image.png'), DEFAULT_MAX_IMAGE_BYTES)
-          this.opts.log('info', '收到图片 → ' + saved.path + ' (' + Math.round(saved.bytes / 1024) + 'KB)')
-          // 走 DSH 原生附件：图片作为 image block 进模型请求；纯文本模型由宿主降级为占位文本
+          const header = await this.headerOfImage(saved.path)
+          const verdict = judgeSticker({
+            segmentType: seg.type,
+            summary: String((seg.data as { summary?: unknown } | undefined)?.summary ?? ''),
+            fileName: fileRef,
+            bytes: saved.bytes,
+            header,
+          })
+          // 表情包照样登记成附件（模型看得懂梗，只是提示词里只许接情绪、不许描述画面）
           const admitted = await this.admitImage(cwd, saved.path, nameFromRef(fileRef, 'image'))
           for (const block of admitted.blocks) blocks.push(block)
           if (admitted.part !== undefined) parts.push(admitted.part)
           const attached = admitted.blocks.length > 0
-          // 路径注释永远保留：无视觉模型只会拿到宿主的占位文本，路径是它们唯一的抓手；
-          // 视觉模型另外还能直接拿到 image block。
-          notes.push('[图片: ' + saved.path + ']' + (attached ? '' : '（未登记为附件，仅路径）'))
+          this.opts.log('info', '收到图片 → ' + saved.path + ' (' + Math.round(saved.bytes / 1024) + 'KB) ' + (verdict.sticker ? '判为表情包: ' + verdict.reason : '普通图'))
+          if (verdict.sticker) {
+            notes.push('[表情包]（群友的情绪表达：只用来判断情绪/语气，用匹配的语气接话；不要描述画面、不要用 read_image 再看，也别提"这张图/表情包"）')
+          } else {
+            // 路径注释永远保留：无视觉模型只会拿到宿主的占位文本，路径是它们唯一的抓手；
+            // 视觉模型另外还能直接拿到 image block。
+            notes.push('[图片: ' + saved.path + ']' + (attached ? '' : '（未登记为附件，仅路径）'))
+          }
         } else if (seg.type === 'record') {
           // QQ 语音：统一走 voiceOf（带缓存，触发判定已经识别过的这里不再重复花钱）
           const voice = await this.voiceOf(fileRef, cwd)
@@ -2239,6 +2298,17 @@ export class Bridge {
 
   private dispatch(chat: ChatState, text: string, blocks: ContentBlock[] = [], parts: Array<Record<string, unknown>> = [], kind: 'reply' | 'proactive' = 'reply'): void {
     this.debugLog(chat.cwd, 'dispatch 进入 ref=' + chat.ref.key + ' text=' + text.length + '字 blocks=' + blocks.length + ' parts=' + parts.length)
+    // 本轮还在跑：攒着，等 turn/end 合并成一条再投（否则会变成 DSH 里的「N 条排队消息」）
+    if (chat.busy === true) {
+      if (kind === 'proactive') {
+        this.pendingProactive.delete(chat.ref.key)
+        this.proactiveStartedAt.delete(chat.ref.key)
+        this.opts.log('debug', '本轮忙，跳过这次主动发言: ' + chat.ref.key)
+        return
+      }
+      this.queueDispatch(chat, { at: Date.now(), text, blocks, parts, kind })
+      return
+    }
     chat.buffer = []
     chat.lastText = text
     // 每次投递前重新断言「免审批」：用户在 GUI 换过权限档位也能继续工作
@@ -2270,11 +2340,14 @@ export class Bridge {
         content: [...blocks, { type: 'text', text }],
         source: { kind: 'plugin:dsh-napcat' },
       }))
+      chat.busy = true
+      chat.busySince = Date.now()
       this.stats.dispatched += 1
       if (kind === 'proactive') this.stats.proactiveTurns += 1
       else this.stats.replyTurns += 1
       this.opts.log('info', '已投递到模型: ' + chat.ref.key + ' (' + text.length + ' 字)')
     } catch (error) {
+      chat.busy = false
       this.opts.log('warn', '投递失败: ' + describe(error))
       void this.recoverChat(chat, error)
       return
@@ -2282,6 +2355,8 @@ export class Bridge {
     // followup 可能是异步的（会话被归档/删除、agent 已释放时会 reject）——必须接住，否则消息静默丢失
     if (pending !== null && typeof pending === 'object' && typeof (pending as { then?: unknown }).then === 'function') {
       void (pending as Promise<unknown>).catch((error: unknown) => {
+        chat.busy = false
+        chat.busySince = undefined
         this.opts.log('warn', '投递被拒: ' + describe(error))
         void this.recoverChat(chat, error)
       })
@@ -2289,6 +2364,43 @@ export class Bridge {
     chat.dispatchedAt = Date.now()
     // 新建的会话一般不会失效；只有 resume 回来的旧会话（可能已归档）才需要看门狗
     if (chat.fresh !== true) this.armWatchdog(chat, text)
+  }
+
+  /** busy 期间把一条投递攒起来（同一段文本只留一次）。 */
+  private queueDispatch(chat: ChatState, item: QueuedDispatch): void {
+    // 兜底：busy 卡太久（turn/end 丢了）就强制解除，别让后续消息永远排队
+    if (chat.busy === true && (chat.busySince ?? 0) > 0 && Date.now() - (chat.busySince ?? 0) > BUSY_MAX_MS) {
+      this.opts.log('warn', 'busy 超过 ' + Math.round(BUSY_MAX_MS / 60000) + ' 分钟还没 turn/end，强制解除: ' + chat.ref.key)
+      chat.busy = false
+      chat.busySince = undefined
+    }
+    if (chat.busy !== true) {
+      // 刚被强制解除（或本来就没忙）：把积压的和这条一起立刻投掉
+      const merged = mergeQueued([...(chat.queued ?? []), item])
+      chat.queued = []
+      this.opts.log('info', '忙标记已解除，立即合并投递: ' + chat.ref.key)
+      this.dispatch(chat, merged.text, merged.blocks, merged.parts, item.kind)
+      return
+    }
+    const list = pushQueued(chat.queued ?? [], item)
+    if (list === chat.queued) return
+    chat.queued = list
+    this.opts.log('info', '本轮还在跑，先攒着（第 ' + list.length + ' 条）: ' + chat.ref.key)
+  }
+
+  /** turn/end 后把攒下的消息合并成一条投递（最多 MERGE_MAX_ITEMS 条）。 */
+  private flushQueued(chat: ChatState): void {
+    const list = chat.queued ?? []
+    chat.queued = []
+    if (list.length === 0) return
+    if (chat.busy === true) {
+      // 防御：还在忙就放回去，等下一次 turn/end
+      chat.queued = list
+      return
+    }
+    const { text, blocks, parts } = mergeQueued(list)
+    this.opts.log('info', '合并投递 ' + list.length + ' 条 → 1 条: ' + chat.ref.key + '（' + text.length + ' 字）')
+    this.dispatch(chat, text, blocks, parts, 'reply')
   }
 
   /**
@@ -2322,6 +2434,14 @@ export class Bridge {
   /** 会话失效后：重建会话并把这条消息再投一次（每条消息只重试一次）。 */
   private async recoverAndRetry(chat: ChatState, text: string): Promise<void> {
     const ref = chat.ref
+    chat.busy = false
+    // 第一反应不是换会话（换会话=上下文丢失）：先在同一会话重投一次
+    if (chat.retriedAgain !== true) {
+      chat.retriedAgain = true
+      this.opts.log('warn', '会话没开始执行，先在同一会话重投一次（不换新会话）: ' + ref.key)
+      this.dispatch(chat, text)
+      return
+    }
     if (chat.retried === true) {
       await this.sendText(chat, '⚠️ 会话没有响应，已换新会话仍失败，请稍后再试')
       return
@@ -2340,6 +2460,12 @@ export class Bridge {
 
   /** 投递失败（归档/删除/agent 释放）：丢掉旧会话状态，下次消息重新建会话，并告知用户。 */
   private async recoverChat(chat: ChatState, error: unknown, notify = true): Promise<void> {
+    chat.busy = false
+    chat.busySince = undefined
+    if ((chat.queued ?? []).length > 0) {
+      this.opts.log('warn', '会话重置，丢弃 ' + String((chat.queued ?? []).length) + ' 条待投递消息: ' + chat.ref.key)
+      chat.queued = []
+    }
     if (chat.startTimer !== undefined) {
       clearTimeout(chat.startTimer)
       chat.startTimer = undefined
@@ -2390,6 +2516,11 @@ export class Bridge {
     chat.lastEventAt = Date.now()
 
     if (event.type === 'turn/start') {
+      chat.busy = true
+      chat.busySince = Date.now()
+      // 这一轮确实起来了：清掉「重试过」的标记，下次超时还能再走一遍自愈
+      chat.retriedAgain = false
+      chat.retried = false
       chat.buffer = []
       return
     }
@@ -2409,6 +2540,8 @@ export class Bridge {
     }
 
     if (event.type === 'turn/end') {
+      chat.busy = false
+      chat.busySince = undefined
       this.opts.log('debug', 'turn/end 原因: ' + JSON.stringify((event.data as { reason?: unknown }).reason ?? {}).slice(0, 400))
       const reason = event.data.reason
       let text = chat.buffer.join('\n').trim()
@@ -2428,6 +2561,7 @@ export class Bridge {
           if (text === '' && reason.kind === 'error') {
             this.opts.log('debug', '主动发言轮次出错（忽略）: ' + reason.error.message)
           }
+          this.flushQueued(chat)
           return
         }
         state.skipStreak = 0
@@ -2453,6 +2587,7 @@ export class Bridge {
             else void this.recoverChat(chat, reason.error, false)
           }
       }
+      this.flushQueued(chat)
       return
     }
   }
@@ -3080,4 +3215,27 @@ export function splitSegments(parts: OutPart[], maxChars: number): OutPart[][] {
   }
   flush()
   return groups
+}
+
+/** 把一个投递放进队列：同文本去重、超上限丢最旧的。返回原数组表示没变化。 */
+export function pushQueued(list: QueuedDispatch[], item: QueuedDispatch): QueuedDispatch[] {
+  if (list.some(x => x.text === item.text)) return list
+  const next = [...list, item]
+  return next.length > MERGE_MAX_ITEMS ? next.slice(next.length - MERGE_MAX_ITEMS) : next
+}
+
+/**
+ * 把 busy 期间攒下的多条消息合并成一条。
+ * 只有一条时保持原文（不打扰）；多条时加编号，截断到 MERGE_MAX_CHARS。
+ */
+export function mergeQueued(list: QueuedDispatch[]): { text: string; blocks: ContentBlock[]; parts: Array<Record<string, unknown>> } {
+  const blocks = list.flatMap(x => x.blocks)
+  const parts = list.flatMap(x => x.parts)
+  const first = list[0]
+  if (first !== undefined && list.length === 1) return { text: first.text, blocks, parts }
+  const body = list
+    .map((x, i) => '【第' + String(i + 1) + '条】' + x.text.trim())
+    .join('\n\n')
+  const text = ('【多人同时说话，合并成一条】\n' + body).slice(0, MERGE_MAX_CHARS)
+  return { text, blocks, parts }
 }

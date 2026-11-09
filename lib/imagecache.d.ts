@@ -32,7 +32,7 @@ export declare class ImageCache {
     private readonly opts;
     constructor(opts: ImageCacheOptions);
     private get root();
-    /** 清理超过保留天数的日期目录。 */
+    /** 清理超过保留天数的日期目录 + 收件箱根目录里的旧媒体。 */
     sweep(now?: number): Promise<number>;
     /** 当天已存张数。 */
     countToday(now?: number): Promise<number>;

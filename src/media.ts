@@ -1,6 +1,6 @@
 /** 媒体收发：本地文件 ↔ base64、URL 下载、收件目录。NapCat 在远端时一律用 base64。 */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 
@@ -98,4 +98,37 @@ export function imageMediaType(buffer: Buffer): 'image/png' | 'image/jpeg' | 'im
     buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
   ) return 'image/webp'
   return undefined
+}
+
+/**
+ * 清理收件箱里的旧媒体（napcat-inbox 根目录下的图片/视频/音频）。
+ * - 只删文件，不碰子目录（imgs/ 由 ImageCache 按日期目录自己清）
+ * - 保留 _image-debug.log
+ * 返回删掉的文件数。
+ */
+export async function pruneInbox(inbox: string, retentionDays: number, now = Date.now()): Promise<number> {
+  if (retentionDays <= 0) return 0
+  const cutoff = now - retentionDays * 86_400_000
+  let removed = 0
+  let entries
+  try {
+    entries = await readdir(inbox, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue
+    if (entry.name === '_image-debug.log') continue
+    const path = join(inbox, entry.name)
+    try {
+      const info = await stat(path)
+      if (info.mtimeMs < cutoff) {
+        await rm(path, { force: true })
+        removed += 1
+      }
+    } catch {
+      // 单个文件失败不影响其它
+    }
+  }
+  return removed
 }

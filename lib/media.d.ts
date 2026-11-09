@@ -31,3 +31,10 @@ export declare function base64UrlToBuffer(value: string): Buffer;
 export declare function nameFromRef(ref: string, fallback: string): string;
 /** 按魔数判断图片类型（附件服务会校验声明类型，必须准确）。 */
 export declare function imageMediaType(buffer: Buffer): 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' | undefined;
+/**
+ * 清理收件箱里的旧媒体（napcat-inbox 根目录下的图片/视频/音频）。
+ * - 只删文件，不碰子目录（imgs/ 由 ImageCache 按日期目录自己清）
+ * - 保留 _image-debug.log
+ * 返回删掉的文件数。
+ */
+export declare function pruneInbox(inbox: string, retentionDays: number, now?: number): Promise<number>;

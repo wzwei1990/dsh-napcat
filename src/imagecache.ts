@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto'
 import { appendFile, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { downloadToFile } from './media.js'
+import { downloadToFile, pruneInbox } from './media.js'
 import type { LogLevel } from './onebot.js'
 
 export interface ImageCacheOptions {
@@ -52,7 +52,7 @@ export class ImageCache {
     return join(this.opts.cwd, 'napcat-inbox', 'imgs')
   }
 
-  /** 清理超过保留天数的日期目录。 */
+  /** 清理超过保留天数的日期目录 + 收件箱根目录里的旧媒体。 */
   async sweep(now = Date.now()): Promise<number> {
     let removed = 0
     try {
@@ -73,6 +73,13 @@ export class ImageCache {
       }
     } catch {
       // 目录还不存在
+    }
+    // 收件箱根目录：原图/表情包/视频/文件也按同一保留天数清理
+    // （之前只清 imgs/ 日期目录，inbox 根目录的文件会一直堆着）
+    try {
+      removed += await pruneInbox(join(this.opts.cwd, 'napcat-inbox'), this.opts.retentionDays, now)
+    } catch {
+      // 清理失败不影响主流程
     }
     return removed
   }

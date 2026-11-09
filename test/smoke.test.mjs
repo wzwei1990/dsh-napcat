@@ -3,13 +3,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { base64UrlToBuffer, isHttpUrl, nameFromRef, safeName } from '../lib/media.js'
 import { MemoryStore } from '../lib/memory.js'
 import { decide, inQuietHours, newChatState, parseQuietHours, poissonHit, skipBackoffFactor } from '../lib/proactive.js'
-import { dayKey, urlHash } from '../lib/imagecache.js'
+import { ImageCache, dayKey, urlHash } from '../lib/imagecache.js'
 import { findKeyword, mentions, parseCq, parsePersonaOverrides, rankByFileName, scoreFileName, shortHash, splitText, stripKeyword, titleFrom, toText } from '../lib/text.js'
 import { allowAccess, chatRefOf, sessionIdForChat } from '../lib/chat.js'
+import { Bridge, mergeQueued, pushQueued } from '../lib/bridge.js'
+import { judgeSticker, readImageHeader } from '../lib/sticker.js'
+import { pruneInbox } from '../lib/media.js'
 
 const config = {
   adminUsers: ['10001'],
@@ -1153,4 +1157,188 @@ test('B站回复通知：只发管理员、间隔不低于 30 分钟、无新增
   assert.equal(merged.replyNotifyIntervalMinutes, 120)
   const custom = resolveConfig({ replyNotifyIntervalMinutes: 30 })
   assert.equal(custom.replyNotifyIntervalMinutes, 30)
+})
+
+test('mergeQueued：单条原样、多条加编号并合并 blocks', () => {
+  const single = mergeQueued([{ at: 1, text: ' 就一条 ', blocks: [], parts: [], kind: 'reply' }])
+  assert.equal(single.text, ' 就一条 ')
+
+  const merged = mergeQueued([
+    { at: 1, text: '谁在', blocks: [{ type: 'image' }], parts: [{ type: 'image' }], kind: 'reply' },
+    { at: 2, text: ' 开黑吗', blocks: [], parts: [], kind: 'reply' },
+    { at: 3, text: '来了', blocks: [], parts: [], kind: 'reply' },
+  ])
+  assert.ok(merged.text.startsWith('【多人同时说话，合并成一条】'), merged.text)
+  assert.ok(merged.text.includes('【第1条】谁在'))
+  assert.ok(merged.text.includes('【第2条】开黑吗'))
+  assert.ok(merged.text.includes('【第3条】来了'))
+  assert.equal(merged.blocks.length, 1)
+  assert.equal(merged.parts.length, 1)
+})
+
+test('mergeQueued：超长截断到 4000 字以内', () => {
+  const list = Array.from({ length: 3 }, (_, i) => ({ at: i, text: '字'.repeat(3000), blocks: [], parts: [], kind: 'reply' }))
+  const merged = mergeQueued(list)
+  assert.ok(merged.text.length <= 4000, String(merged.text.length))
+})
+
+test('pushQueued：同文本去重、超 6 条丢最旧', () => {
+  const item = (text) => ({ at: Date.now(), text, blocks: [], parts: [], kind: 'reply' })
+  const a = pushQueued([], item('一'))
+  assert.equal(a.length, 1)
+  const again = pushQueued(a, item('一'))
+  assert.equal(again, a, '重复文本应原样返回同一个数组')
+
+  let list = []
+  for (let i = 0; i < 9; i++) list = pushQueued(list, item('第' + i + '条'))
+  assert.equal(list.length, 6, '上限 6 条')
+  assert.equal(list[0].text, '第3条')
+  assert.equal(list[5].text, '第8条')
+})
+
+test('busy 期间不投递、turn/end 后合并成一条', async () => {
+  const calls = []
+  const b = Object.create(Bridge.prototype)
+  b.opts = { log: () => {}, ctx: {}, config: {}, conn: {} }
+  b.stats = { dispatched: 0, replyTurns: 0, proactiveTurns: 0 }
+  b.chats = new Map()
+  b.bySession = new Map()
+  b.archiveCollectors = new Map()
+  b.pendingProactive = new Set()
+  b.proactiveStates = new Map()
+  b.proactiveStartedAt = new Map()
+  b.stopped = false
+  b.debugLog = () => {}
+  b.sendText = async () => {}
+  b.stripArchiveBlock = (x) => x
+
+  const agent = {
+    followup: (msg) => {
+      const text = (msg.content ?? []).filter(c => c.type === 'text').map(c => c.text).join('')
+      calls.push(text)
+      return Promise.resolve()
+    },
+  }
+  const chat = {
+    ref: { key: 'group:1', id: '1', kind: 'group' },
+    agent,
+    buffer: [],
+    lastReplyId: '',
+    recentReplyIds: [],
+    fresh: true,
+    dispose: async () => {},
+  }
+  b.chats.set('group:1', chat)
+  b.bySession.set('s1', 'group:1')
+
+  b.dispatch(chat, '第一条')
+  b.dispatch(chat, '第二条')
+  b.dispatch(chat, '第三条')
+  assert.equal(calls.length, 1, 'busy 期间不应再投递')
+  assert.equal((chat.queued ?? []).length, 2, '两条应攒进队列')
+
+  b.onSessionEvent({ id: 's1' }, { type: 'turn/end', data: { reason: { kind: 'done' } } })
+  await new Promise(r => setTimeout(r, 10))
+  assert.equal(calls.length, 2, 'turn/end 后应合并投递一次')
+  assert.ok(calls[1].includes('【第1条】第二条'), '合并文本应带编号: ' + calls[1])
+  assert.ok(calls[1].includes('【第2条】第三条'))
+  assert.equal(chat.busy, true, '合并投递后重新进入 busy')
+})
+
+// ── 表情包识别 ───────────────────────────────────────────────────────
+
+function pngHeader(w, h, colorType) {
+  const b = Buffer.alloc(33)
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0)
+  b.writeUInt32BE(13, 8)
+  b.write('IHDR', 12, 'ascii')
+  b.writeUInt32BE(w, 16)
+  b.writeUInt32BE(h, 20)
+  b[24] = 8
+  b[25] = colorType
+  return b
+}
+function gifHeader(w, h) {
+  const b = Buffer.alloc(13)
+  b.write('GIF89a', 0, 'ascii')
+  b.writeUInt16LE(w, 6)
+  b.writeUInt16LE(h, 8)
+  return b
+}
+function jpegHeader(w, h) {
+  const b = Buffer.alloc(20)
+  b[0] = 0xff; b[1] = 0xd8
+  b[2] = 0xff; b[3] = 0xc0
+  b.writeUInt16BE(17, 4)
+  b[6] = 8
+  b.writeUInt16BE(h, 7)
+  b.writeUInt16BE(w, 9)
+  return b
+}
+
+test('readImageHeader 解析 PNG / GIF / JPEG 尺寸', () => {
+  assert.deepEqual(readImageHeader(pngHeader(300, 280, 6)), { format: 'png', width: 300, height: 280, hasAlpha: true })
+  assert.deepEqual(readImageHeader(pngHeader(800, 600, 2)), { format: 'png', width: 800, height: 600, hasAlpha: false })
+  assert.deepEqual(readImageHeader(gifHeader(200, 200)), { format: 'gif', width: 200, height: 200 })
+  assert.deepEqual(readImageHeader(jpegHeader(1920, 1080)), { format: 'jpeg', width: 1920, height: 1080 })
+})
+
+test('judgeSticker：表情包命中、照片/大图不误判', () => {
+  // mface / summary 强信号
+  assert.equal(judgeSticker({ segmentType: 'mface' }).sticker, true)
+  assert.equal(judgeSticker({ summary: '[动画表情]' }).sticker, true)
+  // GIF 一定是表情包
+  assert.equal(judgeSticker({ header: { format: 'gif', width: 200, height: 200 }, bytes: 300 * 1024 }).sticker, true)
+  // 小透明 PNG 判表情包
+  assert.equal(judgeSticker({ header: { format: 'png', width: 300, height: 280, hasAlpha: true }, bytes: 120 * 1024 }).sticker, true)
+  // 大透明 PNG 不判（可能是透明背景的大立绘）
+  assert.equal(judgeSticker({ header: { format: 'png', width: 1200, height: 1600, hasAlpha: true }, bytes: 2 * 1024 * 1024 }).sticker, false)
+  // JPEG 照片/截图不判
+  assert.equal(judgeSticker({ header: { format: 'jpeg', width: 1920, height: 1080 }, bytes: 900 * 1024 }).sticker, false)
+})
+
+test('pruneInbox：只删超期文件、保留日志与目录', async () => {
+  const { mkdtemp, mkdir, writeFile, utimes } = await import('node:fs/promises')
+  const dir = await mkdtemp(join(tmpdir(), 'napcat-inbox-'))
+  const old = join(dir, 'old.jpg')
+  const fresh = join(dir, 'new.jpg')
+  const log = join(dir, '_image-debug.log')
+  await writeFile(old, 'x')
+  await writeFile(fresh, 'x')
+  await writeFile(log, 'x')
+  await mkdir(join(dir, 'imgs'))
+  const tenDaysAgo = (Date.now() - 10 * 86_400_000) / 1000
+  await utimes(old, tenDaysAgo, tenDaysAgo)
+  const removed = await pruneInbox(dir, 7)
+  assert.equal(removed, 1)
+  const left = await import('node:fs').then(m => m.readdirSync(dir))
+  assert.ok(left.includes('new.jpg'))
+  assert.ok(left.includes('_image-debug.log'))
+  assert.ok(left.includes('imgs'))
+})
+
+test('ImageCache.sweep 同时清理 imgs 日期目录和 inbox 根文件', async () => {
+  const { mkdtemp, mkdir, writeFile, utimes } = await import('node:fs/promises')
+  const cwd = await mkdtemp(join(tmpdir(), 'napcat-sweep-'))
+  const inbox = join(cwd, 'napcat-inbox')
+  const oldDay = join(inbox, 'imgs', '20200101')
+  await mkdir(oldDay, { recursive: true })
+  await writeFile(join(oldDay, 'a.png'), 'x')
+  const oldFile = join(inbox, 'old-sticker.gif')
+  const newFile = join(inbox, 'new.png')
+  await writeFile(oldFile, 'x')
+  await writeFile(newFile, 'x')
+  await writeFile(join(inbox, '_image-debug.log'), 'x')
+  const tenDaysAgo = (Date.now() - 10 * 86_400_000) / 1000
+  await utimes(oldDay, tenDaysAgo, tenDaysAgo)
+  await utimes(oldFile, tenDaysAgo, tenDaysAgo)
+
+  const cache = new ImageCache({ cwd, maxBytes: 1, dailyCap: 1, retentionDays: 7, log: () => {} })
+  const removed = await cache.sweep()
+  assert.equal(removed, 2, '日期目录 + 根目录旧文件各算一个')
+
+  const left = await import('node:fs').then(m => m.readdirSync(inbox))
+  assert.ok(left.includes('new.png'), '新文件保留')
+  assert.ok(left.includes('_image-debug.log'), '日志保留')
+  assert.ok(!left.includes('old-sticker.gif'), '旧表情包被清')
 })

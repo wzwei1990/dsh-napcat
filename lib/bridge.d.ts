@@ -9,13 +9,21 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
+import type { ContentBlock } from '@deepseek-ai/dsh-llm';
 import type { Config } from './config.js';
 import { type ChatRef } from './chat.js';
 import type { LogLevel, OneBotConnection } from './onebot.js';
 import { SubscriptionStore } from './subscriptions.js';
 import { ProviderRegistry } from './providers.js';
 import type { ObEvent } from './types.js';
-/** 投递后多久没收到 turn/start 就判定会话失效。 */
+/** busy 期间攒下来的一条待投递消息。 */
+interface QueuedDispatch {
+    at: number;
+    text: string;
+    blocks: ContentBlock[];
+    parts: Array<Record<string, unknown>>;
+    kind: 'reply' | 'proactive';
+}
 interface ChatState {
     ref: ChatRef;
     /** 本轮是否额外回一条语音（mirror 模式用） */
@@ -46,6 +54,14 @@ interface ChatState {
     lastText?: string;
     /** 这条消息是否已经重试过一次。 */
     retried?: boolean;
+    /** 是否已经「同一会话重投」过一次（看门狗第二轮用）。 */
+    retriedAgain?: boolean;
+    /** 当前是否有一轮在跑（dispatch 时乐观置位，turn/end 解除）。 */
+    busy?: boolean;
+    /** busy 从什么时候开始（兜底超时用）。 */
+    busySince?: number;
+    /** busy 期间攒下的投递（turn/end 后合并成一条，避免 DSH 侧排 N 条）。 */
+    queued?: QueuedDispatch[];
 }
 export interface BridgeOptions {
     ctx: Context;
@@ -97,7 +113,8 @@ export declare class Bridge {
     /** 每个 cwd 一个图片缓存（配额/清理按 cwd 独立）。 */
     private readonly imageCaches;
     /** 已经清理过过期目录的 cwd。 */
-    private readonly imageCacheSwept;
+    /** 每个 cwd 最近一次清理时间（每小时最多扫一次）。 */
+    private readonly imageCacheSweepAt;
     /** 危险请求拒绝提示的节流时间（每会话 10 分钟一次，避免刷屏）。 */
     private readonly dangerNoticeAt;
     private imageCacheFor;
@@ -238,6 +255,8 @@ export declare class Bridge {
     private warmup;
     private handleEventInner;
     /** 写一行诊断到 <会话cwd>/napcat-inbox/_image-debug.log（出问题时能自查，用户随时可删）。 */
+    /** 读图片前 512 字节解析头部（表情包判定用，失败就当普通图）。 */
+    private headerOfImage;
     private debugLog;
     /** 宿主会话 id → QQ 会话 key（工具省略 chat_id 时用来定位当前会话）。 */
     keyForSession(sessionId: string): string | undefined;
@@ -306,6 +325,10 @@ export declare class Bridge {
      */
     private cwdFor;
     private dispatch;
+    /** busy 期间把一条投递攒起来（同一段文本只留一次）。 */
+    private queueDispatch;
+    /** turn/end 后把攒下的消息合并成一条投递（最多 MERGE_MAX_ITEMS 条）。 */
+    private flushQueued;
     /**
      * 投递后等 turn/start。**两轮**才判定会话失效：
      *   第 1 轮超时 → 只记日志、再等一轮（云端模型排队/慢启动很常见，10s 就判死会误杀活会话）；
@@ -406,4 +429,15 @@ export declare function trimParts(parts: OutPart[]): OutPart[];
  * maxChars <= 0 表示不分段。
  */
 export declare function splitSegments(parts: OutPart[], maxChars: number): OutPart[][];
+/** 把一个投递放进队列：同文本去重、超上限丢最旧的。返回原数组表示没变化。 */
+export declare function pushQueued(list: QueuedDispatch[], item: QueuedDispatch): QueuedDispatch[];
+/**
+ * 把 busy 期间攒下的多条消息合并成一条。
+ * 只有一条时保持原文（不打扰）；多条时加编号，截断到 MERGE_MAX_CHARS。
+ */
+export declare function mergeQueued(list: QueuedDispatch[]): {
+    text: string;
+    blocks: ContentBlock[];
+    parts: Array<Record<string, unknown>>;
+};
 export {};
