@@ -1,11 +1,13 @@
 /** 媒体收发：本地文件 ↔ base64、URL 下载、收件目录。NapCat 在远端时一律用 base64。 */
 
-import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 
 export const DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 export const DEFAULT_MAX_FILE_BYTES = 20 * 1024 * 1024
+/** 视频单独给更大的上限：群里的短视频十几 MB 很常见，按 20MB 卡会直接丢。 */
+export const DEFAULT_MAX_VIDEO_BYTES = 120 * 1024 * 1024
 
 export function isHttpUrl(text: string): boolean {
   return /^https?:\/\//i.test(text)
@@ -118,7 +120,8 @@ export async function pruneInbox(inbox: string, retentionDays: number, now = Dat
   }
   for (const entry of entries) {
     if (!entry.isFile()) continue
-    if (entry.name === '_image-debug.log') continue
+    // 插件自己的元数据（日志、图片频次表）不当作要清理的媒体
+    if (entry.name.startsWith('_')) continue
     const path = join(inbox, entry.name)
     try {
       const info = await stat(path)
@@ -131,4 +134,39 @@ export async function pruneInbox(inbox: string, retentionDays: number, now = Dat
     }
   }
   return removed
+}
+
+/**
+ * 流式下载到文件（视频用）：边下边写，内存占用与文件大小无关；
+ * 超过 maxBytes 立刻中断并删掉半成品。
+ */
+export async function downloadToFileStream(
+  url: string,
+  dir: string,
+  name: string,
+  maxBytes: number,
+): Promise<{ path: string; bytes: number }> {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('下载失败 HTTP ' + response.status + ': ' + url)
+  const declared = Number(response.headers.get('content-length') ?? 0)
+  if (declared > maxBytes) {
+    throw new Error('文件超过上限 ' + Math.round(maxBytes / 1024 / 1024) + 'MB（实际 ' + Math.round(declared / 1024 / 1024) + 'MB）')
+  }
+  const target = join(dir, Date.now().toString(36) + '-' + safeName(name, 'download'))
+  const handle = await open(target, 'w')
+  let bytes = 0
+  try {
+    if (response.body === null) throw new Error('服务器没有返回内容')
+    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+      bytes += chunk.byteLength
+      if (bytes > maxBytes) throw new Error('文件超过上限 ' + Math.round(maxBytes / 1024 / 1024) + 'MB')
+      await handle.write(chunk)
+    }
+  } catch (error) {
+    await handle.close()
+    await rm(target, { force: true })
+    throw error
+  }
+  await handle.close()
+  return { path: target, bytes }
 }

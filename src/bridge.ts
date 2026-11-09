@@ -35,6 +35,8 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Config } from './config.js'
 import { allowAccess, chatRefOf, isAdmin, sessionIdForChat, type ChatRef } from './chat.js'
 import { judgeSticker, readImageHeader } from './sticker.js'
+import { bumpImageFreq, imageKey } from './imagefreq.js'
+import { extractMediaLink, fetchLinkCard, renderLinkBlock } from './links.js'
 import { buildRefusalPrompt, cleanRefusal, detectDanger, type DangerHit } from './danger.js'
 import type { LogLevel, OneBotConnection } from './onebot.js'
 import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, stripKeyword, titleFrom, toText } from './text.js'
@@ -51,7 +53,7 @@ import { faceFor } from './faces.js'
 import { defaultMemeDirs, MemeLibrary, readMemeSettings } from './meme.js'
 import { localToBase64Url } from './media.js'
 import { decide, FRESH_SECONDS, HOT_WINDOW_MS, inQuietHours, maxPerHourOf, newChatState, parseQuietHours, pruneSentAt, scoreHeat, windowMsOf, type ChatProactiveState, type RecentMessage } from './proactive.js'
-import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, base64UrlToBuffer, downloadToFile, ensureInbox, imageMediaType, nameFromRef, pruneInbox } from './media.js'
+import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, DEFAULT_MAX_VIDEO_BYTES, base64UrlToBuffer, downloadToFile, downloadToFileStream, ensureInbox, imageMediaType, nameFromRef, pruneInbox } from './media.js'
 import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
 
@@ -888,7 +890,7 @@ export class Bridge {
         (biliHint === undefined ? '' : biliHint + '\n\n')
         + (gameHint === undefined ? '' : gameHint + '\n\n')
         + (memoryBlock === '' ? '' : memoryBlock + '\n\n')
-        + this.linkHintOf(recent)
+        + (await this.linkHintOf(recent))
         + imageNote
         + anchorBlock
         + '[主动发言] 现在是主动插话窗口。\n'
@@ -927,12 +929,22 @@ export class Bridge {
    * 最近几条里如果有链接（http/https），就提示模型"话题是这条链接"，
    * 并明确要求先抓取内容再聊——否则模型读不懂链接，只能抓更早的话题硬接。
    */
-  private linkHintOf(lines: readonly string[]): string {
+  private async linkHintOf(lines: readonly string[]): Promise<string> {
     const tail = lines.slice(-3)
     for (let index = tail.length - 1; index >= 0; index -= 1) {
       const line = tail[index] ?? ''
       const match = /https?:\/\/[^\s"'）)】]+/.exec(line)
       if (match === null) continue
+      // 小红书 / 网易云：自己解析（免登录能拿到的信息），失败再回落到"你自己去打开"
+      const media = extractMediaLink(line)
+      if (media !== undefined) {
+        const card = await fetchLinkCard(media)
+        if (card !== undefined) {
+          this.opts.log('debug', '链接已解析: ' + card.kind + ' ' + card.title.slice(0, 40))
+          return renderLinkBlock(card)
+        }
+        this.opts.log('debug', '链接解析失败，回落通用提示: ' + media.kind)
+      }
       const url = match[0].slice(0, 200)
       const who = line.split('：')[0]?.trim() ?? ''
       return '【最新话题是一条链接' + (who === '' ? '' : '（' + who.slice(0, 20) + ' 发的）') + '】' + url + '\n'
@@ -1656,6 +1668,22 @@ export class Bridge {
   }
 
   /** 写一行诊断到 <会话cwd>/napcat-inbox/_image-debug.log（出问题时能自查，用户随时可删）。 */
+  /** 读图片前 N 字节（频次指纹用）。 */
+  private async headOfImage(path: string, bytes: number): Promise<Buffer | undefined> {
+    try {
+      const handle = await open(path, 'r')
+      try {
+        const buffer = Buffer.alloc(bytes)
+        const read = await handle.read(buffer, 0, buffer.length, 0)
+        return buffer.subarray(0, read.bytesRead)
+      } finally {
+        await handle.close()
+      }
+    } catch {
+      return undefined
+    }
+  }
+
   /** 读图片前 512 字节解析头部（表情包判定用，失败就当普通图）。 */
   private async headerOfImage(path: string): Promise<ReturnType<typeof readImageHeader> | undefined> {
     try {
@@ -1872,19 +1900,33 @@ export class Bridge {
           if (url === undefined || url === '') throw new Error('get_image 没有返回 url')
           const saved = await downloadToFile(url, inbox, nameFromRef(fileRef, 'image.png'), DEFAULT_MAX_IMAGE_BYTES)
           const header = await this.headerOfImage(saved.path)
-          const verdict = judgeSticker({
+          const baseVerdict = judgeSticker({
             segmentType: seg.type,
             summary: String((seg.data as { summary?: unknown } | undefined)?.summary ?? ''),
             fileName: fileRef,
             bytes: saved.bytes,
             header,
           })
+          // 群友反复发的同一张图，大概率是表情包（JPEG 表情包靠格式认不出来）
+          let verdict = baseVerdict
+          let seenCount = 0
+          try {
+            const head = await this.headOfImage(saved.path, 64 * 1024)
+            if (head !== undefined) {
+              seenCount = await bumpImageFreq(inbox, imageKey(head, saved.bytes), saved.bytes)
+              if (!verdict.sticker && seenCount >= 2 && saved.bytes <= 2 * 1024 * 1024) {
+                verdict = { sticker: true, reason: '群内高频图 ×' + String(seenCount) }
+              }
+            }
+          } catch (error) {
+            this.debugLog(cwd, '图片频次统计失败: ' + describe(error))
+          }
           // 表情包照样登记成附件（模型看得懂梗，只是提示词里只许接情绪、不许描述画面）
           const admitted = await this.admitImage(cwd, saved.path, nameFromRef(fileRef, 'image'))
           for (const block of admitted.blocks) blocks.push(block)
           if (admitted.part !== undefined) parts.push(admitted.part)
           const attached = admitted.blocks.length > 0
-          this.opts.log('info', '收到图片 → ' + saved.path + ' (' + Math.round(saved.bytes / 1024) + 'KB) ' + (verdict.sticker ? '判为表情包: ' + verdict.reason : '普通图'))
+          this.opts.log('info', '收到图片 → ' + saved.path + ' (' + Math.round(saved.bytes / 1024) + 'KB, 第' + String(seenCount + 1) + '次) ' + (verdict.sticker ? '判为表情包: ' + verdict.reason : '普通图'))
           if (verdict.sticker) {
             notes.push('[表情包]（群友的情绪表达：只用来判断情绪/语气，用匹配的语气接话；不要描述画面、不要用 read_image 再看，也别提"这张图/表情包"）')
           } else {
@@ -1909,11 +1951,11 @@ export class Bridge {
           let savedPath: string | undefined
           const info = await this.opts.conn.call<{ base64?: string; url?: string; file?: string }>('get_file', { file: fileRef })
           if (isHttp(info?.url)) {
-            const saved = await downloadToFile(info.url, inbox, fileName, DEFAULT_MAX_FILE_BYTES)
+            const saved = await downloadToFileStream(info.url, inbox, fileName, DEFAULT_MAX_VIDEO_BYTES)
             savedPath = saved.path
           } else if (typeof info?.base64 === 'string' && info.base64 !== '') {
             const buffer = base64UrlToBuffer(info.base64)
-            if (buffer.byteLength > DEFAULT_MAX_FILE_BYTES) throw new Error('视频超过上限')
+            if (buffer.byteLength > DEFAULT_MAX_VIDEO_BYTES) throw new Error('视频超过上限')
             savedPath = join(inbox, Date.now().toString(36) + '-' + fileName)
             await writeFile(savedPath, buffer)
           } else if (typeof info?.url === 'string' && info.url !== '') {
@@ -1925,7 +1967,14 @@ export class Bridge {
           const storyboard = bili?.storyboard
           if (storyboard !== undefined) {
             try {
-              const shot = await storyboard(savedPath)
+              // 大视频抽帧可能很慢：给 90 秒上限，超时当失败（不阻塞这一轮回复）
+              const shot = await Promise.race([
+                storyboard(savedPath),
+                new Promise<never>((_resolve, reject) => {
+                  const timer = setTimeout(() => reject(new Error('抽帧超时（90s）')), 90_000)
+                  timer.unref?.()
+                }),
+              ])
               const admitted = await this.admitImage(cwd, shot.imagePath, 'storyboard.png')
               for (const block of admitted.blocks) blocks.push(block)
               if (admitted.part !== undefined) parts.push(admitted.part)

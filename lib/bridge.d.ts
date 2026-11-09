@@ -255,6 +255,8 @@ export declare class Bridge {
     private warmup;
     private handleEventInner;
     /** 写一行诊断到 <会话cwd>/napcat-inbox/_image-debug.log（出问题时能自查，用户随时可删）。 */
+    /** 读图片前 N 字节（频次指纹用）。 */
+    private headOfImage;
     /** 读图片前 512 字节解析头部（表情包判定用，失败就当普通图）。 */
     private headerOfImage;
     private debugLog;

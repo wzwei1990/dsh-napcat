@@ -14,6 +14,8 @@ import { allowAccess, chatRefOf, sessionIdForChat } from '../lib/chat.js'
 import { Bridge, mergeQueued, pushQueued } from '../lib/bridge.js'
 import { judgeSticker, readImageHeader } from '../lib/sticker.js'
 import { pruneInbox } from '../lib/media.js'
+import { bumpImageFreq, imageKey, loadImageFreq } from '../lib/imagefreq.js'
+import { extractMediaLink, lyricPreview, neteaseSongId, parseOpenGraph, renderLinkBlock } from '../lib/links.js'
 
 const config = {
   adminUsers: ['10001'],
@@ -1341,4 +1343,81 @@ test('ImageCache.sweep 同时清理 imgs 日期目录和 inbox 根文件', async
   assert.ok(left.includes('new.png'), '新文件保留')
   assert.ok(left.includes('_image-debug.log'), '日志保留')
   assert.ok(!left.includes('old-sticker.gif'), '旧表情包被清')
+})
+
+// ── 小红书 / 网易云链接 ──────────────────────────────────────────────
+
+test('extractMediaLink 认小红书 / 网易云，不误认 B 站和普通链接', () => {
+  assert.deepEqual(extractMediaLink('看这个 https://www.xiaohongshu.com/explore/abc123?xsec_token=xyz 不错'), { kind: 'xhs', url: 'https://www.xiaohongshu.com/explore/abc123?xsec_token=xyz' })
+  assert.equal(extractMediaLink('https://xhslink.com/aBc12d').kind, 'xhs')
+  assert.deepEqual(extractMediaLink('听听 https://music.163.com/song?id=12345&userid=1'), { kind: 'netease', url: 'https://music.163.com/song?id=12345&userid=1' })
+  assert.equal(extractMediaLink('https://163cn.tv/AbCdEf').kind, 'netease')
+  assert.equal(extractMediaLink('https://www.bilibili.com/video/BV1xx411c7mD'), undefined)
+  assert.equal(extractMediaLink('https://example.com/a'), undefined)
+})
+
+test('parseOpenGraph 兼容属性顺序并解码实体', () => {
+  const html = [
+    '<meta property="og:title" content="标题 &amp; 副标题">',
+    "<meta content='描述内容' property='og:description'>",
+    '<meta name="og:image" content="https://img.example/a.jpg">',
+  ].join('\n')
+  const og = parseOpenGraph(html)
+  assert.equal(og.title, '标题 & 副标题')
+  assert.equal(og.description, '描述内容')
+  assert.equal(og.image, 'https://img.example/a.jpg')
+})
+
+test('neteaseSongId 支持 query / path / 短链跳过', () => {
+  assert.equal(neteaseSongId('https://music.163.com/song?id=12345'), '12345')
+  assert.equal(neteaseSongId('https://music.163.com/#/song?id=67890'), '67890')
+  assert.equal(neteaseSongId('https://music.163.com/song/112233'), '112233')
+  assert.equal(neteaseSongId('https://163cn.tv/AbCdEf'), undefined)
+})
+
+test('lyricPreview 去时间戳、去空行、限行数', () => {
+  const lrc = '[00:00.00]第一句\n[00:03.00]\n[00:06.00]第二句\n[00:09.00]第三句\n[00:12.00]第四句'
+  assert.equal(lyricPreview(lrc, 2), '第一句\n第二句')
+})
+
+test('renderLinkBlock 给出事实与"不要播报"的约束', () => {
+  const xhs = renderLinkBlock({ kind: 'xhs', url: 'https://x', title: '周末去哪玩', desc: '城郊有个花海' })
+  assert.ok(xhs.includes('小红书'))
+  assert.ok(xhs.includes('周末去哪玩'))
+  assert.ok(xhs.includes('不要播报'))
+
+  const music = renderLinkBlock({ kind: 'netease', url: 'https://y', title: '晴天', author: '周杰伦', desc: '叶惠美', extra: '故事的小黄花' })
+  assert.ok(music.includes('晴天'))
+  assert.ok(music.includes('周杰伦'))
+  assert.ok(music.includes('故事的小黄花'))
+  assert.ok(music.includes('不要播报'))
+})
+
+test('imageKey 同内容同大小稳定、不同内容不同', () => {
+  const a = Buffer.from('abc')
+  const b = Buffer.from('abd')
+  assert.equal(imageKey(a, 3), imageKey(Buffer.from('abc'), 3))
+  assert.notEqual(imageKey(a, 3), imageKey(b, 3))
+  assert.notEqual(imageKey(a, 3), imageKey(a, 4))
+})
+
+test('bumpImageFreq 累计次数并持久化，超 500 条丢最旧', async () => {
+  const { mkdtemp } = await import('node:fs/promises')
+  const dir = await mkdtemp(join(tmpdir(), 'napcat-freq-'))
+  assert.equal(await bumpImageFreq(dir, 'k1', 100), 1)
+  assert.equal(await bumpImageFreq(dir, 'k1', 100), 2)
+  const table = await loadImageFreq(dir)
+  assert.equal(table.k1.count, 2)
+
+  // 灌 505 条，应该只留 500
+  const now = Date.now()
+  const bulk = {}
+  for (let i = 0; i < 505; i++) bulk['bulk' + i] = { count: 1, lastAt: now + i, bytes: 10 }
+  const { writeFile } = await import('node:fs/promises')
+  await writeFile(join(dir, '_image-counts.json'), JSON.stringify(bulk), 'utf8')
+  await bumpImageFreq(dir, 'newest', 10, now + 10_000)
+  const after = await loadImageFreq(dir)
+  assert.equal(Object.keys(after).length, 500)
+  assert.ok(after.newest !== undefined, '新的条目保留')
+  assert.ok(after.bulk4 === undefined, '最旧的被丢弃')
 })

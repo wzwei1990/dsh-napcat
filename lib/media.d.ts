@@ -1,6 +1,8 @@
 /** 媒体收发：本地文件 ↔ base64、URL 下载、收件目录。NapCat 在远端时一律用 base64。 */
 export declare const DEFAULT_MAX_IMAGE_BYTES: number;
 export declare const DEFAULT_MAX_FILE_BYTES: number;
+/** 视频单独给更大的上限：群里的短视频十几 MB 很常见，按 20MB 卡会直接丢。 */
+export declare const DEFAULT_MAX_VIDEO_BYTES: number;
 export declare function isHttpUrl(text: string): boolean;
 /** 把任意名字洗成安全的单段文件名。 */
 export declare function safeName(name: string, fallback: string): string;
@@ -38,3 +40,11 @@ export declare function imageMediaType(buffer: Buffer): 'image/png' | 'image/jpe
  * 返回删掉的文件数。
  */
 export declare function pruneInbox(inbox: string, retentionDays: number, now?: number): Promise<number>;
+/**
+ * 流式下载到文件（视频用）：边下边写，内存占用与文件大小无关；
+ * 超过 maxBytes 立刻中断并删掉半成品。
+ */
+export declare function downloadToFileStream(url: string, dir: string, name: string, maxBytes: number): Promise<{
+    path: string;
+    bytes: number;
+}>;
