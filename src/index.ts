@@ -9,11 +9,14 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 import { Bridge } from './bridge.js'
 import { Config, resolveConfig } from './config.js'
 import type { Config as ConfigShape } from './config.js'
 import { OneBotConnection, type LogLevel } from './onebot.js'
+import { seedPersonaDir } from './persona.js'
 import { registerTools } from './tools.js'
 import { SubscriptionStore } from './subscriptions.js'
 import { ProviderRegistry } from './providers.js'
@@ -77,6 +80,15 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
 
   if (config.mode === 'forward' && config.accessToken === '') {
     log('warn', 'forward 模式下 accessToken 为空：NapCat 若配了 token，连接会被拒')
+  }
+
+  // 三张内置人物卡写成文件（只补缺失的，不覆盖你改过的）
+  try {
+    const personaDir = join(homedir(), '.dsh', 'dsh-napcat', 'persona')
+    const written = seedPersonaDir(personaDir)
+    if (written.length > 0) log('info', '已写入内置人物卡 ' + written.length + ' 张 → ' + personaDir)
+  } catch (error) {
+    log('debug', '写入人物卡目录失败: ' + (error instanceof Error ? error.message : String(error)))
   }
 
   registerTools(ctx, conn, log, {

@@ -7,6 +7,9 @@
  * 渲染成一段固定模板，注入 systemPrompt.context；卡片里不复述给用户。
  */
 
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 export interface CharacterCard {
   name: string
   /** 别名（用户叫习惯了，两个名字都认） */
@@ -203,4 +206,28 @@ export function loadCard(options: { name: string; inline: string; dir: string; r
     // 读文件失败就退回内置
   }
   return BUILTIN_CARDS[name] ?? DEFAULT_CARD
+}
+
+/**
+ * 把人模板写进 persona 目录（只在文件不存在时写，不覆盖用户改过的卡）。
+ * 这样三张内置卡和其它自定义卡形态一致：都能直接编辑。
+ */
+export function seedPersonaDir(dir: string): string[] {
+  const written: string[] = []
+  try {
+    mkdirSync(dir, { recursive: true })
+  } catch {
+    return written
+  }
+  for (const [name, card] of Object.entries(BUILTIN_CARDS)) {
+    const file = join(dir, name + '.json')
+    if (existsSync(file)) continue
+    try {
+      writeFileSync(file, JSON.stringify(card, null, 2) + '\n', 'utf8')
+      written.push(file)
+    } catch {
+      // 单个文件失败不影响其它
+    }
+  }
+  return written
 }

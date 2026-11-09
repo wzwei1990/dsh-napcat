@@ -16,7 +16,7 @@ import { judgeSticker, readImageHeader } from '../lib/sticker.js'
 import { pruneInbox } from '../lib/media.js'
 import { buildHintBlock, looksLikeHelpRequest } from '../lib/gamewiki.js'
 import { bumpImageFreq, imageKey, loadImageFreq } from '../lib/imagefreq.js'
-import { DEFAULT_CARD, cardFromConfig, loadCard, parseCharacterCard, renderPersona } from '../lib/persona.js'
+import { DEFAULT_CARD, cardFromConfig, loadCard, parseCharacterCard, renderPersona, seedPersonaDir } from '../lib/persona.js'
 import { extractMediaLink, lyricPreview, neteaseSongId, parseOpenGraph, renderLinkBlock } from '../lib/links.js'
 
 const config = {
@@ -1545,4 +1545,21 @@ test('GameWiki：最近聊过的游戏在关键词缺失时也能补线索', asy
   assert.ok(later.includes('回答要给到点子上'))
   // 别的群不该继承
   assert.equal(await wiki.hintFor('这个 boss 怎么打', 'group:2'), undefined)
+})
+
+test('seedPersonaDir：写入三张内置卡、不覆盖已存在的文件', async () => {
+  const { mkdtemp, readFile, writeFile } = await import('node:fs/promises')
+  const dir = await mkdtemp(join(tmpdir(), 'persona-seed-'))
+  const written = seedPersonaDir(dir)
+  assert.equal(written.length, 3, '首次写入三张')
+  const def = JSON.parse(await readFile(join(dir, 'default.json'), 'utf8'))
+  assert.equal(def.name, '大肥鱼')
+  assert.deepEqual(def.aliases, ['小灯'])
+
+  // 改一张，再播种不该覆盖
+  await writeFile(join(dir, 'default.json'), JSON.stringify({ name: '我改过的卡' }), 'utf8')
+  const again = seedPersonaDir(dir)
+  assert.equal(again.length, 0, '已存在的文件不覆盖')
+  const after = JSON.parse(await readFile(join(dir, 'default.json'), 'utf8'))
+  assert.equal(after.name, '我改过的卡')
 })

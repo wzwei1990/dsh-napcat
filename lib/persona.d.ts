@@ -65,3 +65,8 @@ export declare function loadCard(options: {
     exists: (path: string) => boolean;
     join: (...parts: string[]) => string;
 }): CharacterCard;
+/**
+ * 把人模板写进 persona 目录（只在文件不存在时写，不覆盖用户改过的卡）。
+ * 这样三张内置卡和其它自定义卡形态一致：都能直接编辑。
+ */
+export declare function seedPersonaDir(dir: string): string[];
