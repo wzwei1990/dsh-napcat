@@ -57,6 +57,8 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'replyAsQuote', label: '回复时引用原消息', kind: 'boolean' },
         { key: 'splitMaxChars', label: '单条消息最大字数（0=不分段）', kind: 'number' },
         { key: 'sendIntervalMs', label: '分段消息间隔（毫秒，防 QQ 风控）', kind: 'number' },
+        { key: 'queueMode', label: '上一条还在回复时，新消息怎么处理', kind: 'select', options: [['hybrid', 'hybrid：默认攒着，本轮跑超时就插队（推荐）'], ['merge', 'merge：总是等本轮结束、合并成一条再回'], ['insert', 'insert：总是立刻插队进当前轮']] },
+        { key: 'interruptAfterMs', label: '插队阈值（毫秒；hybrid 模式下本轮跑超过它就把新消息插队，默认 20000）', kind: 'number' },
         { key: 'dryRun', label: '只读模式：不向 QQ 发送任何消息（本地测试用）', kind: 'boolean' },
         { section: '表情包' },
         { key: 'memeEnabled', label: '把 [表情:描述] 解析成 dsh-meme 图库里的图发送', kind: 'boolean' },
