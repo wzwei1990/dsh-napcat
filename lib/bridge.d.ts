@@ -16,6 +16,19 @@ import type { LogLevel, OneBotConnection } from './onebot.js';
 import { SubscriptionStore } from './subscriptions.js';
 import { ProviderRegistry } from './providers.js';
 import type { ObEvent } from './types.js';
+/**
+ * DSH 会话侧的「append 正在发布」冲突。
+ * 多个群友几乎同时说话时，turn/end 刚触发合并投递、上一次 append 还没发布完，就会撞上这个错。
+ * 它**不代表会话坏掉**：重试即可，绝不能当成会话失效去重置（否则会把正常会话丢掉）。
+ */
+export declare function isAppendCollision(reason: string): boolean;
+/**
+ * 上一轮还在跑时，这条新消息要不要插队（立刻追加进当前轮）。
+ * @param mode merge=从不插队；insert=总是插队；hybrid=当前轮跑够久才插队
+ * @param runningMs 当前轮已经跑了多久
+ * @param afterMs hybrid 的阈值
+ */
+export declare function shouldInterrupt(mode: 'merge' | 'insert' | 'hybrid', runningMs: number, afterMs: number): boolean;
 /** busy 期间攒下来的一条待投递消息。 */
 interface QueuedDispatch {
     at: number;
@@ -62,6 +75,15 @@ interface ChatState {
     busySince?: number;
     /** busy 期间攒下的投递（turn/end 后合并成一条，避免 DSH 侧排 N 条）。 */
     queued?: QueuedDispatch[];
+    /**
+     * 「append 冲突」重试次数。
+     * 多人群聊里 turn/end 与下一条消息可能撞车：DSH 侧上一条 append 还在发布，
+     * 这时 followup 抛 `session append cannot reenter while another append is being published`。
+     * 它不是会话失效，**不能**走 recoverChat 重置会话，改成延迟重投。
+     */
+    appendRetries?: number;
+    /** 上面那次重投的定时器。 */
+    appendTimer?: ReturnType<typeof setTimeout>;
 }
 export interface BridgeOptions {
     ctx: Context;
@@ -93,6 +115,10 @@ export declare class Bridge {
     /** 上次预热尝试时间（避免频繁重试）。 */
     private readonly warmAttempts;
     private readonly chats;
+    /** 每个会话最近发过的视频（触发消息不带媒体时用来补解析）。 */
+    private readonly recentVideos;
+    /** 已经补解析过的「会话|视频」组合，避免同一条视频被反复下载抽帧。 */
+    private readonly parsedVideos;
     /** 语音识别缓存：fileRef → { path, text }（触发判定与入站处理共用，避免识别两次） */
     private readonly voiceCaches;
     private readonly bySession;
@@ -296,6 +322,18 @@ export declare class Bridge {
      * 触发判定与入站处理都会调它，同一段语音只下载/识别一次。
      */
     private voiceOf;
+    /**
+     * 下载一个 QQ 视频并抽 9 格分镜（有 dsh-bili 时），把结果推进 notes/blocks/parts。
+     * 触发链路和「最近视频补解析」共用这一段，避免两处逻辑漂移。
+     */
+    private parseVideoFile;
+    /** 记住本会话最近出现的视频（观察层用它，触发时即使这条消息不带视频也能补解析）。 */
+    private rememberRecentVideo;
+    /**
+     * 触发消息自己不带视频、但本会话最近 10 分钟有人发过 → 顺手解析那个视频。
+     * 否则「发完视频再问一句」这种最常见的情况，模型只看得到 [视频(12秒)]，等于没看过画面。
+     */
+    private parseRecentVideo;
     private resolveInboundMedia;
     /** 同一聊天并发进来时只装配一次（并发 create 会撞 write handle）。 */
     private readonly pendingChats;
@@ -359,6 +397,11 @@ export declare class Bridge {
      */
     private cwdFor;
     private dispatch;
+    /**
+     * append 冲突后的延迟重投（指数退避 400ms→4s，最多 6 次）。
+     * 只把消息攒回队列，不碰会话状态；把 busy 清掉，让重投时能正常走 dispatch。
+     */
+    private retryAppend;
     /** busy 期间把一条投递攒起来（同一段文本只留一次）。 */
     private queueDispatch;
     /** turn/end 后把攒下的消息合并成一条投递（最多 MERGE_MAX_ITEMS 条）。 */
@@ -388,6 +431,11 @@ export declare class Bridge {
     private humorousRefusal;
     /** 拒绝危险请求时回一句（每会话 10 分钟最多一次，避免刷屏）。 */
     private replyDanger;
+    /**
+     * 发一条文本到 QQ，并把它记进 recent 缓冲（模型下一轮才知道自己上一条说了什么）。
+     * @param options.record=false 用于系统提示（如「⚠️ 消息没送进模型」）——这类话不是角色发言，
+     *        记进历史只会污染上下文（实测会出现在 recent.jsonl 里当成人设台词）。
+     */
     private sendText;
     /**
      * 设置页「发一条测试语音」用：给指定会话（或最近有对话的会话）发一条语音。

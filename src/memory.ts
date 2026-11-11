@@ -271,17 +271,60 @@ export class MemoryStore {
     }
   }
 
-  /** 追加一条最近消息（滚动保留；与已有同一条消息（5 秒内同内容）会合并而不是重复追加）。 */
+  /**
+   * 追加一条最近消息（滚动保留；与已有同一条消息（5 秒内同内容）会合并而不是重复追加）。
+   *
+   * 关于占位符（[图片] / [表情包] / [视频(12秒)] …）：
+   * 它们**不是噪音**，是"有人发了什么"的唯一线索，不能丢，能补的信息尽量补：
+   * - 图片：带缓存路径就写 `[图片:napcat-inbox/…]`（模型能 read_image 回看）
+   * - 表情包：同一人连续多张折叠成 `[表情包×3]`（见 collapseStickers），避免刷屏
+   * - 视频/语音：`[视频(12秒)]` / `[语音(3秒) 转写：…]` 本身带时长/内容
+   */
   async appendRecent(chatKey: string, entry: { nick: string; text: string; at?: number }): Promise<void> {
+    const text = entry.text
+      .trim()
+      .replace(/(?:\[表情包\]\s*){2,}/g, token => '[表情包×' + String((token.match(/\[表情包\]/g) ?? []).length) + ']')
+    if (text === '') return
     try {
       await this.mergeInto(chatKey, [{
         t: entry.at ?? Date.now(),
         nick: entry.nick.slice(0, 24),
-        text: entry.text.slice(0, 500),
+        text: text.slice(0, 500),
       }])
     } catch (error) {
       this.opts.log('debug', '记录群消息失败: ' + (error instanceof Error ? error.message : String(error)))
     }
+  }
+
+  /** 形如 `[表情包]` / `[表情包×3]` 的行（连续表情包折叠用） */
+  private static isStickerRow(row: { text: string }): boolean {
+    return /^\[表情包(?:×\d+)?\]$/.test(row.text.trim())
+  }
+
+  /**
+   * 把同一人 60 秒内的连续表情包行折叠成一条 `[表情包×N]`：
+   * 群友连发三张贴纸时，历史里只留「他连发了三个表情包」，比三行占位符有用得多。
+   */
+  private collapseStickers(rows: Array<{ t: number; nick: string; text: string }>): Array<{ t: number; nick: string; text: string }> {
+    const out: Array<{ t: number; nick: string; text: string }> = []
+    for (const row of rows) {
+      const prev = out[out.length - 1]
+      if (
+        prev !== undefined &&
+        MemoryStore.isStickerRow(prev) &&
+        MemoryStore.isStickerRow(row) &&
+        prev.nick === row.nick &&
+        Math.abs(row.t - prev.t) <= 60_000
+      ) {
+        const prevCount = Number(/×(\d+)/.exec(prev.text)?.[1] ?? '1')
+        const rowCount = Number(/×(\d+)/.exec(row.text)?.[1] ?? '1')
+        prev.text = '[表情包×' + String(prevCount + rowCount) + ']'
+        prev.t = Math.min(prev.t, row.t)
+        continue
+      }
+      out.push({ ...row })
+    }
+    return out
   }
 
   /**
@@ -328,7 +371,10 @@ export class MemoryStore {
     let added = 0
     for (const row of incoming) {
       // 同内容 + 5 秒内 → 合并
-      const index = rows.findIndex(existing => normText(existing.text) === normText(row.text) && Math.abs(existing.t - row.t) <= 5000)
+      // 判重必须带昵称：群里两个人前后脚发同一句话（尤其 [图片]/[表情包] 这类占位符）不是同一条消息
+      const index = MemoryStore.isStickerRow(row)
+        ? -1
+        : rows.findIndex(existing => existing.nick === row.nick && normText(existing.text) === normText(row.text) && Math.abs(existing.t - row.t) <= 5000)
       if (index >= 0) rows[index] = better(rows[index] as Row, row)
       else {
         rows.push(row)
@@ -340,13 +386,14 @@ export class MemoryStore {
     const compacted: Row[] = []
     for (const row of rows) {
       const last = compacted[compacted.length - 1]
-      if (last !== undefined && normText(last.text) === normText(row.text) && Math.abs(row.t - last.t) <= 5000) {
+      if (last !== undefined && !MemoryStore.isStickerRow(row) && last.nick === row.nick && normText(last.text) === normText(row.text) && Math.abs(row.t - last.t) <= 5000) {
         compacted[compacted.length - 1] = better(last, row)
       } else {
         compacted.push(row)
       }
     }
-    const kept = compacted.slice(-this.opts.recentLimit)
+    // 再把同一人 60 秒内连发的表情包折叠成 [表情包×N]（补全信息，同时避免历史被贴纸刷屏）
+    const kept = this.collapseStickers(compacted).slice(-this.opts.recentLimit)
     const payload = kept.map(row => JSON.stringify(row)).join('\n') + '\n'
     const tmp = path + '.tmp'
     await writeFile(tmp, payload, 'utf8')
@@ -990,10 +1037,11 @@ export class MemoryStore {
     blocks.push('【性格倾向】如果你发现自己对某类话题有稳定的反应或偏好（比如被夸会嘴硬、聊游戏会变话痨、被喊"老板"会别扭），'
       + '可以调用 napcat_persona({ action: "trait", text: "…" }) 记一条（≤60 字，每轮最多 1 条；没有新材料就不记）。'
       + '这是你慢慢长出来的性格，不要跟用户汇报这件事。')
-    blocks.push('【表情包硬规则】标了 [表情包] 的图**已经在你看得见的附件里**（随消息发给你了），所以：'
-      + '① **不要描述画面**（"这张脸/图里/表情包上是/青灰色的脸"这类都不行），也不要把图里的字念出来；'
-      + '② 你只需要判断它传达的情绪/态度，用一句符合这个情绪的短话接住（或者干脆不接）；'
-      + '③ 不要去 read_image 翻历史里的表情包路径——当前这条图已经看得到，再读一遍只会让你更想描述画面。')
+    blocks.push('【表情包/梗图：你自己判断，别机械描述】标了 [表情包] 的图已经在你看得见的附件里（随消息发给你了）：'
+      + '① 先判断这张图的用途——**梗图/表情包**就按它传达的情绪/态度用一句短话接住，不要描述画面、不要把图里的字念出来；'
+      + '② 如果对方明显是想让你看图里**具体内容**（问你图里是什么、让你解释截图、让你对比），那就正常看图回答，该描述就描述；'
+      + '③ 拿不准时按情绪接一句最稳；不要在回复里写"这张图/图里/表情包上"这类旁白式描述；'
+      + '④ 当前这条图你已经看得到，不用再去 read_image 翻历史里的表情包路径。')
     // 群聊礼仪放最后：预算紧张时优先牺牲它，别挤掉 @ 段和长期记忆
     if (parts.chatKey.startsWith('group:')) {
       blocks.push('【这是群聊，不是一对一】群里有多个人：认人，必要时用昵称点名（不必每句）；谁问的就回谁；'

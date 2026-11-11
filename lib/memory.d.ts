@@ -50,12 +50,27 @@ export declare class MemoryStore {
     remember(chatKey: string, content: string, agent: unknown, tags?: readonly string[]): Promise<string>;
     /** 召回与本群相关的内容（query 用最近对话摘要）。 */
     recall(chatKey: string, query: string, agent: unknown): Promise<string>;
-    /** 追加一条最近消息（滚动保留；与已有同一条消息（5 秒内同内容）会合并而不是重复追加）。 */
+    /**
+     * 追加一条最近消息（滚动保留；与已有同一条消息（5 秒内同内容）会合并而不是重复追加）。
+     *
+     * 关于占位符（[图片] / [表情包] / [视频(12秒)] …）：
+     * 它们**不是噪音**，是"有人发了什么"的唯一线索，不能丢，能补的信息尽量补：
+     * - 图片：带缓存路径就写 `[图片:napcat-inbox/…]`（模型能 read_image 回看）
+     * - 表情包：同一人连续多张折叠成 `[表情包×3]`（见 collapseStickers），避免刷屏
+     * - 视频/语音：`[视频(12秒)]` / `[语音(3秒) 转写：…]` 本身带时长/内容
+     */
     appendRecent(chatKey: string, entry: {
         nick: string;
         text: string;
         at?: number;
     }): Promise<void>;
+    /** 形如 `[表情包]` / `[表情包×3]` 的行（连续表情包折叠用） */
+    private static isStickerRow;
+    /**
+     * 把同一人 60 秒内的连续表情包行折叠成一条 `[表情包×N]`：
+     * 群友连发三张贴纸时，历史里只留「他连发了三个表情包」，比三行占位符有用得多。
+     */
+    private collapseStickers;
     /**
      * 把若干行合并进 recent.jsonl（append 与预热共用）。
      * 判重：同一「5 秒时间窗 + 归一化内容」视为同一条（历史接口秒级 / 实时毫秒级 / [图片] vs [图片:文件名]）。

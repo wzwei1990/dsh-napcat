@@ -66,6 +66,31 @@ type HostContext = Context & { agents: AgentRegistry }
 /** 一次合并最多几条 / 最长多少字（防刷屏把上下文撑爆）。 */
 /** busy 兜底：超过这么久还没收到 turn/end，就当这一轮丢了，强制解除。 */
 const BUSY_MAX_MS = 15 * 60 * 1000
+/** 记住「最近发过的视频」多久（毫秒）：触发消息不带视频时，用它补解析。 */
+const RECENT_VIDEO_TTL_MS = 10 * 60 * 1000
+/** 每个会话最多记几个最近视频（只留最后一个会被用，留几个便于调试/容错）。 */
+const RECENT_VIDEO_MAX = 3
+
+/**
+ * DSH 会话侧的「append 正在发布」冲突。
+ * 多个群友几乎同时说话时，turn/end 刚触发合并投递、上一次 append 还没发布完，就会撞上这个错。
+ * 它**不代表会话坏掉**：重试即可，绝不能当成会话失效去重置（否则会把正常会话丢掉）。
+ */
+export function isAppendCollision(reason: string): boolean {
+  return /cannot reenter while another append/i.test(reason) || /another append is being published/i.test(reason)
+}
+
+/**
+ * 上一轮还在跑时，这条新消息要不要插队（立刻追加进当前轮）。
+ * @param mode merge=从不插队；insert=总是插队；hybrid=当前轮跑够久才插队
+ * @param runningMs 当前轮已经跑了多久
+ * @param afterMs hybrid 的阈值
+ */
+export function shouldInterrupt(mode: 'merge' | 'insert' | 'hybrid', runningMs: number, afterMs: number): boolean {
+  if (mode === 'insert') return true
+  if (mode === 'merge') return false
+  return runningMs >= Math.max(1000, afterMs)
+}
 
 const MERGE_MAX_ITEMS = 6
 const MERGE_MAX_CHARS = 4000
@@ -117,6 +142,15 @@ interface ChatState {
   busySince?: number
   /** busy 期间攒下的投递（turn/end 后合并成一条，避免 DSH 侧排 N 条）。 */
   queued?: QueuedDispatch[]
+  /**
+   * 「append 冲突」重试次数。
+   * 多人群聊里 turn/end 与下一条消息可能撞车：DSH 侧上一条 append 还在发布，
+   * 这时 followup 抛 `session append cannot reenter while another append is being published`。
+   * 它不是会话失效，**不能**走 recoverChat 重置会话，改成延迟重投。
+   */
+  appendRetries?: number
+  /** 上面那次重投的定时器。 */
+  appendTimer?: ReturnType<typeof setTimeout>
 }
 
 export interface BridgeOptions {
@@ -146,6 +180,10 @@ export class Bridge {
   /** 上次预热尝试时间（避免频繁重试）。 */
   private readonly warmAttempts = new Map<string, number>()
   private readonly chats = new Map<string, ChatState>()
+  /** 每个会话最近发过的视频（触发消息不带媒体时用来补解析）。 */
+  private readonly recentVideos = new Map<string, Array<{ fileRef: string; at: number }>>()
+  /** 已经补解析过的「会话|视频」组合，避免同一条视频被反复下载抽帧。 */
+  private readonly parsedVideos = new Set<string>()
   /** 语音识别缓存：fileRef → { path, text }（触发判定与入站处理共用，避免识别两次） */
   private readonly voiceCaches = new Map<string, { path: string; text: string }>()
   private readonly bySession = new Map<string, string>()
@@ -399,9 +437,13 @@ export class Bridge {
         replaced = true
       }
     }
+    // 记住本会话最近发过的视频：后面「有人 @机器人问那个视频」时用它补解析
+    for (const seg of segments.filter(item => item.type === 'video').slice(0, 2)) {
+      const fileRef = String((seg.data as { file?: unknown } | undefined)?.file ?? '')
+      this.rememberRecentVideo(ref.key, fileRef)
+    }
     const records = segments.filter(seg => seg.type === 'record')
-    if (records.length > 0) {
-      for (const seg of records.slice(0, 2)) {
+    if (records.length > 0) {      for (const seg of records.slice(0, 2)) {
         const fileRef = String((seg.data as { file?: unknown } | undefined)?.file ?? '')
         // 已经因为触发判定转写过的语音：把文字也写进记录（模型回看聊天能知道对方说了什么，且不多花钱）
         const cached = fileRef === '' ? undefined : this.voiceCaches.get(fileRef)
@@ -409,11 +451,15 @@ export class Bridge {
         text = text.replace('[语音]', '[语音' + describeMedia(seg) + ']' + transcript)
       }
     }
-    if (saved.length === 0 && stickerCount === 0) return text
+    // 只有表情包、没有别的文字：仍然记一条 `[表情包]`（这是"有人发了贴纸"的唯一线索），
+    // 由 MemoryStore 把同一人连发的折叠成 [表情包×N]
+    if (saved.length === 0 && stickerCount === 0) return text.trim()
     const notes: string[] = []
     if (saved.length > 0) notes.push('[图片:' + saved.join(',') + ']')
     if (stickerCount > 0) notes.push(new Array(stickerCount).fill('[表情包]').join(' '))
-    return text.replace(/\[图片\]/g, '') + ' ' + notes.join(' ')
+    // 去掉孤立的 [图片] 占位符，避免留下「 [表情包]」这种前导空格
+    const head = text.replace(/\[图片\]/g, '').trim()
+    return (head === '' ? notes.join(' ') : head + ' ' + notes.join(' ')).trim()
   }
 
   // ── 主动发言（伪人模式）──
@@ -1908,6 +1954,108 @@ export class Bridge {
     }
   }
 
+  /**
+   * 下载一个 QQ 视频并抽 9 格分镜（有 dsh-bili 时），把结果推进 notes/blocks/parts。
+   * 触发链路和「最近视频补解析」共用这一段，避免两处逻辑漂移。
+   */
+  private async parseVideoFile(
+    fileRef: string,
+    cwd: string,
+    inbox: string,
+    notes: string[],
+    blocks: ContentBlock[],
+    parts: Array<Record<string, unknown>>,
+  ): Promise<void> {
+    const isHttp = (v: unknown): v is string => typeof v === 'string' && /^https?:\/\//i.test(v)
+    const fileName = nameFromRef(fileRef, 'video.mp4')
+    let savedPath: string | undefined
+    const info = await this.opts.conn.call<{ base64?: string; url?: string; file?: string }>('get_file', { file: fileRef })
+    if (isHttp(info?.url)) {
+      const saved = await downloadToFileStream(info.url, inbox, fileName, DEFAULT_MAX_VIDEO_BYTES)
+      savedPath = saved.path
+    } else if (typeof info?.base64 === 'string' && info.base64 !== '') {
+      const buffer = base64UrlToBuffer(info.base64)
+      if (buffer.byteLength > DEFAULT_MAX_VIDEO_BYTES) throw new Error('视频超过上限')
+      savedPath = join(inbox, Date.now().toString(36) + '-' + fileName)
+      await writeFile(savedPath, buffer)
+    } else if (typeof info?.url === 'string' && info.url !== '') {
+      throw new Error('NapCat 只给了它本机的路径（' + info.url + '），跨机器取不到')
+    }
+    if (savedPath === undefined) throw new Error('get_file 没有可下载的视频地址')
+    this.opts.log('info', '收到视频 → ' + savedPath)
+    const bili = this.opts.ctx.get?.('dshBili') as { storyboard?: (input: string) => Promise<{ imagePath: string; timeline: Array<{ index: number; label: string }> }> } | undefined
+    const storyboard = bili?.storyboard
+    if (storyboard === undefined) {
+      notes.push('[视频: ' + savedPath + ']（没有 dsh-bili，未抽帧）')
+      return
+    }
+    try {
+      // 大视频抽帧可能很慢：给 90 秒上限，超时当失败（不阻塞这一轮回复）
+      const shot = await Promise.race([
+        storyboard(savedPath),
+        new Promise<never>((_resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('抽帧超时（90s）')), 90_000)
+          timer.unref?.()
+        }),
+      ])
+      const admitted = await this.admitImage(cwd, shot.imagePath, 'storyboard.png')
+      for (const block of admitted.blocks) blocks.push(block)
+      if (admitted.part !== undefined) parts.push(admitted.part)
+      const labels = shot.timeline.map(item => '#' + String(item.index) + ' ' + item.label).join('  ')
+      notes.push('[视频: ' + savedPath + ']')
+      notes.push('[图片: ' + shot.imagePath + ']（视频分镜，时间轴：' + labels + '）')
+    } catch (error) {
+      this.debugLog(cwd, '视频抽帧失败: ' + describe(error))
+      notes.push('[视频: ' + savedPath + ']（抽帧失败：' + describe(error) + '）')
+    }
+  }
+
+  /** 记住本会话最近出现的视频（观察层用它，触发时即使这条消息不带视频也能补解析）。 */
+  private rememberRecentVideo(chatKey: string, fileRef: string): void {
+    if (fileRef === '') return
+    const now = Date.now()
+    const list = (this.recentVideos.get(chatKey) ?? []).filter(item => now - item.at <= RECENT_VIDEO_TTL_MS)
+    if (list.some(item => item.fileRef === fileRef)) return
+    list.push({ fileRef, at: now })
+    this.recentVideos.set(chatKey, list.slice(-RECENT_VIDEO_MAX))
+  }
+
+  /**
+   * 触发消息自己不带视频、但本会话最近 10 分钟有人发过 → 顺手解析那个视频。
+   * 否则「发完视频再问一句」这种最常见的情况，模型只看得到 [视频(12秒)]，等于没看过画面。
+   */
+  private async parseRecentVideo(
+    chat: ChatState,
+    cwd: string,
+    inbox: string,
+    notes: string[],
+    blocks: ContentBlock[],
+    parts: Array<Record<string, unknown>>,
+  ): Promise<void> {
+    if (!this.opts.config.biliStoryboard) return
+    const now = Date.now()
+    const list = (this.recentVideos.get(chat.ref.key) ?? []).filter(item => now - item.at <= RECENT_VIDEO_TTL_MS)
+    this.recentVideos.set(chat.ref.key, list)
+    const latest = list[list.length - 1]
+    if (latest === undefined) return
+    // 同一个视频只解析一次：否则「发过视频之后的每条 @ 消息」都会重新下载+抽帧
+    const cacheKey = chat.ref.key + '|' + latest.fileRef
+    if (this.parsedVideos.has(cacheKey)) return
+    this.parsedVideos.add(cacheKey)
+    if (this.parsedVideos.size > 200) {
+      const first = this.parsedVideos.values().next().value
+      if (first !== undefined) this.parsedVideos.delete(first)
+    }
+    this.opts.log('info', '触发消息不带视频，补解析最近的视频: ' + chat.ref.key)
+    try {
+      await this.parseVideoFile(latest.fileRef, cwd, inbox, notes, blocks, parts)
+      notes.push('（上面这个视频是群里最近发的，不是本条消息附带的）')
+    } catch (error) {
+      this.debugLog(cwd, '最近视频补解析失败: ' + describe(error))
+      notes.push('[视频]（群里最近发过一段视频，解析失败：' + describe(error) + '）')
+    }
+  }
+
   private async resolveInboundMedia(msg: ObMessageEvent, chat: ChatState): Promise<{ notes: string[]; blocks: ContentBlock[]; parts: Array<Record<string, unknown>> }> {
     const media = segmentsOf(msg.message).filter(seg => seg.type === 'image' || seg.type === 'mface' || seg.type === 'file' || seg.type === 'video' || seg.type === 'record')
     // 引用回复：被引用的那条消息里的图/文件不在当前 segments 里，用 get_msg 取回来
@@ -1957,14 +2105,25 @@ export class Bridge {
           for (const block of admitted.blocks) blocks.push(block)
           if (admitted.part !== undefined) parts.push(admitted.part)
           const attached = admitted.blocks.length > 0
-          this.opts.log('info', '收到图片 → ' + saved.path + ' (' + Math.round(saved.bytes / 1024) + 'KB, 第' + String(seenCount + 1) + '次) ' + (verdict.sticker ? '判为表情包: ' + verdict.reason : '普通图'))
-          if (verdict.sticker) {
-            notes.push('[表情包]（群友的情绪表达：这张图已经随消息发给你了，直接按情绪接一句就行；**不要描述画面**、不要念图里的字，也不用再 read_image 去看它）')
-          } else {
-            // 路径注释永远保留：无视觉模型只会拿到宿主的占位文本，路径是它们唯一的抓手；
-            // 视觉模型另外还能直接拿到 image block。
-            notes.push('[图片: ' + saved.path + ']' + (attached ? '' : '（未登记为附件，仅路径）'))
-          }
+          // 判断交回给模型：我们只把「能观察到的事实」写清楚，不替它下结论。
+          // 群里的图可能是梗图/表情包，也可能是要你看的截图/照片——按尺寸和透明通道猜永远会猜错。
+          const plainText = segmentsOf(msg.message)
+            .filter(item => item.type === 'text')
+            .map(item => String((item.data as { text?: unknown } | undefined)?.text ?? ''))
+            .join('')
+            .trim()
+          const caption = plainText.replace(/\[[^\]]*\]/g, '').replace(/\s+/g, '')
+          const facts: string[] = []
+          if (verdict.sticker) facts.push('看着像表情包/梗图')
+          if (seenCount >= 2) facts.push('群里重复出现过（第 ' + String(seenCount + 1) + ' 次）')
+          if (caption === '') facts.push('这条只有图、没配字')
+          else facts.push('配的字：' + plainText.slice(0, 60))
+          this.opts.log('info', '收到图片 → ' + saved.path + ' (' + Math.round(saved.bytes / 1024) + 'KB, 第' + String(seenCount + 1) + '次) ' + facts.join('；'))
+          notes.push(
+            '[图片: ' + saved.path + ']' + (attached ? '' : '（未登记为附件，仅路径）') +
+              '（' + facts.join('；') + '。怎么回应你自己判断：像梗图/表情包就按情绪接一句、别描述画面也别念图里的字；' +
+              '对方明显是让你看图或问图里内容，就正常看图回答）',
+          )
         } else if (seg.type === 'record') {
           // QQ 语音：统一走 voiceOf（带缓存，触发判定已经识别过的这里不再重复花钱）
           const voice = await this.voiceOf(fileRef, cwd)
@@ -1977,48 +2136,7 @@ export class Bridge {
           }
           if (this.opts.config.voiceMirror) chat.replyWithVoice = true
         } else if (seg.type === 'video') {
-          const isHttp = (v: unknown): v is string => typeof v === 'string' && /^https?:\/\//i.test(v)
-          const fileName = nameFromRef(fileRef, 'video.mp4')
-          let savedPath: string | undefined
-          const info = await this.opts.conn.call<{ base64?: string; url?: string; file?: string }>('get_file', { file: fileRef })
-          if (isHttp(info?.url)) {
-            const saved = await downloadToFileStream(info.url, inbox, fileName, DEFAULT_MAX_VIDEO_BYTES)
-            savedPath = saved.path
-          } else if (typeof info?.base64 === 'string' && info.base64 !== '') {
-            const buffer = base64UrlToBuffer(info.base64)
-            if (buffer.byteLength > DEFAULT_MAX_VIDEO_BYTES) throw new Error('视频超过上限')
-            savedPath = join(inbox, Date.now().toString(36) + '-' + fileName)
-            await writeFile(savedPath, buffer)
-          } else if (typeof info?.url === 'string' && info.url !== '') {
-            throw new Error('NapCat 只给了它本机的路径（' + info.url + '），跨机器取不到')
-          }
-          if (savedPath === undefined) throw new Error('get_file 没有可下载的视频地址')
-          this.opts.log('info', '收到视频 → ' + savedPath)
-          const bili = this.opts.ctx.get?.('dshBili') as { storyboard?: (input: string) => Promise<{ imagePath: string; timeline: Array<{ index: number; label: string }> }> } | undefined
-          const storyboard = bili?.storyboard
-          if (storyboard !== undefined) {
-            try {
-              // 大视频抽帧可能很慢：给 90 秒上限，超时当失败（不阻塞这一轮回复）
-              const shot = await Promise.race([
-                storyboard(savedPath),
-                new Promise<never>((_resolve, reject) => {
-                  const timer = setTimeout(() => reject(new Error('抽帧超时（90s）')), 90_000)
-                  timer.unref?.()
-                }),
-              ])
-              const admitted = await this.admitImage(cwd, shot.imagePath, 'storyboard.png')
-              for (const block of admitted.blocks) blocks.push(block)
-              if (admitted.part !== undefined) parts.push(admitted.part)
-              const labels = shot.timeline.map(item => '#' + String(item.index) + ' ' + item.label).join('  ')
-              notes.push('[视频: ' + savedPath + ']')
-              notes.push('[图片: ' + shot.imagePath + ']（视频分镜，时间轴：' + labels + '）')
-            } catch (error) {
-              this.debugLog(cwd, '视频抽帧失败: ' + describe(error))
-              notes.push('[视频: ' + savedPath + ']（抽帧失败：' + describe(error) + '）')
-            }
-          } else {
-            notes.push('[视频: ' + savedPath + ']（没有 dsh-bili，未抽帧）')
-          }
+          await this.parseVideoFile(fileRef, cwd, inbox, notes, blocks, parts)
         } else {
           // NapCat 在远端（常见于 Docker）：get_file 的 url 可能是它**本机路径**，不能 fetch。
           // 顺序照 dsh-onebot：①私聊 get_private_file_url 的 CDN 链接 ②get_file 的 base64 ③http url
@@ -2068,6 +2186,16 @@ export class Bridge {
         const reason = describe(error)
         this.opts.log('warn', '收媒体失败（' + seg.type + '）: ' + reason)
         notes.push('[' + (seg.type === 'image' ? '图片' : seg.type === 'video' ? '视频' : '文件') + ': 下载失败（' + reason + '）]')
+      }
+    }
+    // 本条消息自己没带视频、但群里最近发过 → 补解析（「发完视频再问一句」的场景）
+    const hasVideoHere = segmentsOf(msg.message).some(seg => seg.type === 'video')
+    if (!hasVideoHere) {
+      try {
+        const inbox = await ensureInbox(cwd)
+        await this.parseRecentVideo(chat, cwd, inbox, notes, blocks, parts)
+      } catch (error) {
+        this.debugLog(cwd, '最近视频补解析异常: ' + describe(error))
       }
     }
     return { notes, blocks, parts }
@@ -2433,7 +2561,10 @@ export class Bridge {
   private dispatch(chat: ChatState, text: string, blocks: ContentBlock[] = [], parts: Array<Record<string, unknown>> = [], kind: 'reply' | 'proactive' = 'reply'): void {
     this.debugLog(chat.cwd, 'dispatch 进入 ref=' + chat.ref.key + ' text=' + text.length + '字 blocks=' + blocks.length + ' parts=' + parts.length)
     void this.refreshPersonaIfStale(String(chat.agent.session.id), chat.ref.key)
-    // 本轮还在跑：攒着，等 turn/end 合并成一条再投（否则会变成 DSH 里的「N 条排队消息」）
+    // 本轮还在跑：按 queueMode 决定「攒着」还是「插队」
+    //   merge  —— 攒到 turn/end 合并成一条再投（对 DSH 最友好，不会把会话塞成一堆碎片）
+    //   insert —— 立刻追加进当前轮（DSH 的 followup 支持 turn 中途追加，模型下一步就能看到）
+    //   hybrid —— 默认攒着，但当前轮已经跑太久（默认 20s）就插队，别让群友干等
     if (chat.busy === true) {
       if (kind === 'proactive') {
         this.pendingProactive.delete(chat.ref.key)
@@ -2441,8 +2572,21 @@ export class Bridge {
         this.opts.log('debug', '本轮忙，跳过这次主动发言: ' + chat.ref.key)
         return
       }
-      this.queueDispatch(chat, { at: Date.now(), text, blocks, parts, kind })
-      return
+      const mode = this.opts.config.queueMode
+      const runningMs = chat.busySince !== undefined ? Date.now() - chat.busySince : 0
+      const interrupt = shouldInterrupt(mode, runningMs, this.opts.config.interruptAfterMs)
+      if (!interrupt) {
+        this.queueDispatch(chat, { at: Date.now(), text, blocks, parts, kind })
+        return
+      }
+      // 插队：把已攒的消息并进来（顺序不乱、内容不丢），然后照常 followup。
+      // busy/busySince 保持原值——当前轮还在跑，计时不能被这条重置。
+      const merged = mergeQueued([...(chat.queued ?? []), { at: Date.now(), text, blocks, parts, kind }])
+      chat.queued = []
+      text = merged.text
+      blocks = merged.blocks
+      parts = merged.parts
+      this.opts.log('info', '插队投递（本轮已跑 ' + Math.round(runningMs / 1000) + 's，' + mode + ' 模式）: ' + chat.ref.key)
     }
     chat.buffer = []
     chat.lastText = text
@@ -2477,13 +2621,21 @@ export class Bridge {
       }))
       chat.busy = true
       chat.busySince = Date.now()
+      chat.appendRetries = 0
       this.stats.dispatched += 1
       if (kind === 'proactive') this.stats.proactiveTurns += 1
       else this.stats.replyTurns += 1
       this.opts.log('info', '已投递到模型: ' + chat.ref.key + ' (' + text.length + ' 字)')
     } catch (error) {
       chat.busy = false
-      this.opts.log('warn', '投递失败: ' + describe(error))
+      chat.busySince = undefined
+      const reason = describe(error)
+      if (isAppendCollision(reason)) {
+        // 上一条 append 还在发布：攒回去延迟重投，**不重置会话**
+        this.retryAppend(chat, { at: Date.now(), text, blocks, parts, kind }, reason)
+        return
+      }
+      this.opts.log('warn', '投递失败: ' + reason)
       void this.recoverChat(chat, error)
       return
     }
@@ -2492,13 +2644,41 @@ export class Bridge {
       void (pending as Promise<unknown>).catch((error: unknown) => {
         chat.busy = false
         chat.busySince = undefined
-        this.opts.log('warn', '投递被拒: ' + describe(error))
+        const reason = describe(error)
+        if (isAppendCollision(reason)) {
+          this.retryAppend(chat, { at: Date.now(), text, blocks, parts, kind }, reason)
+          return
+        }
+        this.opts.log('warn', '投递被拒: ' + reason)
         void this.recoverChat(chat, error)
       })
     }
     chat.dispatchedAt = Date.now()
     // 新建的会话一般不会失效；只有 resume 回来的旧会话（可能已归档）才需要看门狗
     if (chat.fresh !== true) this.armWatchdog(chat, text)
+  }
+
+  /**
+   * append 冲突后的延迟重投（指数退避 400ms→4s，最多 6 次）。
+   * 只把消息攒回队列，不碰会话状态；把 busy 清掉，让重投时能正常走 dispatch。
+   */
+  private retryAppend(chat: ChatState, item: QueuedDispatch, reason: string): void {
+    const attempts = chat.appendRetries ?? 0
+    if (attempts >= 6) {
+      this.opts.log('warn', 'append 冲突重试 6 次仍失败，放弃这条并保留会话: ' + chat.ref.key + '（' + reason + '）')
+      chat.appendRetries = 0
+      return
+    }
+    chat.appendRetries = attempts + 1
+    chat.queued = pushQueued(chat.queued ?? [], item)
+    const delay = Math.min(400 * 2 ** attempts, 4000)
+    this.opts.log('debug', 'append 冲突，' + delay + 'ms 后重投（第 ' + (attempts + 1) + ' 次）: ' + chat.ref.key)
+    if (chat.appendTimer !== undefined) clearTimeout(chat.appendTimer)
+    chat.appendTimer = setTimeout(() => {
+      chat.appendTimer = undefined
+      if (chat.busy === true) return // 有别的轮在跑，等它 turn/end 时再 flush
+      this.flushQueued(chat)
+    }, delay)
   }
 
   /** busy 期间把一条投递攒起来（同一段文本只留一次）。 */
@@ -2530,6 +2710,11 @@ export class Bridge {
     if (list.length === 0) return
     if (chat.busy === true) {
       // 防御：还在忙就放回去，等下一次 turn/end
+      chat.queued = list
+      return
+    }
+    if (chat.appendTimer !== undefined) {
+      // 已经排了「append 冲突」重投：交给那个定时器，避免在这里再撞一次
       chat.queued = list
       return
     }
@@ -2578,7 +2763,7 @@ export class Bridge {
       return
     }
     if (chat.retried === true) {
-      await this.sendText(chat, '⚠️ 会话没有响应，已换新会话仍失败，请稍后再试')
+      await this.sendText(chat, '⚠️ 会话没有响应，已换新会话仍失败，请稍后再试', { record: false })
       return
     }
     // 先静默重置，不立刻给群友发"消息没送进模型"；只有重投再失败才告知
@@ -2589,7 +2774,7 @@ export class Bridge {
       this.dispatch(fresh, text)
     } catch (error) {
       this.opts.log('warn', '重建会话失败: ' + describe(error))
-      await this.sendText(chat, '⚠️ 消息没送进模型：' + describe(error) + '\n（已重置会话，再发一条会重新建）')
+      await this.sendText(chat, '⚠️ 消息没送进模型：' + describe(error) + '\n（已重置会话，再发一条会重新建）', { record: false })
     }
   }
 
@@ -2597,6 +2782,11 @@ export class Bridge {
   private async recoverChat(chat: ChatState, error: unknown, notify = true): Promise<void> {
     chat.busy = false
     chat.busySince = undefined
+    chat.appendRetries = 0
+    if (chat.appendTimer !== undefined) {
+      clearTimeout(chat.appendTimer)
+      chat.appendTimer = undefined
+    }
     if ((chat.queued ?? []).length > 0) {
       this.opts.log('warn', '会话重置，丢弃 ' + String((chat.queued ?? []).length) + ' 条待投递消息: ' + chat.ref.key)
       chat.queued = []
@@ -2616,7 +2806,7 @@ export class Bridge {
     } catch {
       // agent 可能已被宿主释放，忽略
     }
-    if (notify) await this.sendText(chat, '⚠️ 消息没送进模型：' + describe(error) + '\n（会话状态已重置，再发一条会重新建会话）')
+    if (notify) await this.sendText(chat, '⚠️ 消息没送进模型：' + describe(error) + '\n（会话状态已重置，再发一条会重新建会话）', { record: false })
   }
   // ── 出站 ───────────────────────────────────────────────────────────────────
 
@@ -2813,7 +3003,12 @@ export class Bridge {
     }
   }
 
-  private async sendText(chat: ChatState, text: string): Promise<void> {
+  /**
+   * 发一条文本到 QQ，并把它记进 recent 缓冲（模型下一轮才知道自己上一条说了什么）。
+   * @param options.record=false 用于系统提示（如「⚠️ 消息没送进模型」）——这类话不是角色发言，
+   *        记进历史只会污染上下文（实测会出现在 recent.jsonl 里当成人设台词）。
+   */
+  private async sendText(chat: ChatState, text: string, options: { record?: boolean } = {}): Promise<void> {
     // 两个独立开关：每次都发 / 只在对方发语音时发
     const wantVoice = this.opts.config.voiceEnabled && text.trim() !== ''
       && (this.opts.config.voiceAlways || (this.opts.config.voiceMirror && chat.replyWithVoice === true))
@@ -2859,7 +3054,7 @@ export class Bridge {
       }
     }
     // 记录自己说的话（否则 recent 缓冲里只有群友消息，模型看不到上一条自己回了什么）
-    if (this.opts.config.memoryEnabled && text.trim() !== '') {
+    if (options.record !== false && this.opts.config.memoryEnabled && text.trim() !== '') {
       try {
         const nick = this.currentPersonaCard().name
         await this.mem.appendRecent(chat.ref.key, { nick, text: text.trim(), at: Date.now() })

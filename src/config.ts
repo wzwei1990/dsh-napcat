@@ -49,6 +49,10 @@ export interface Config {
   /** 单条 QQ 消息的最大字数，超出按段落/句子分段发送；0=不分段。 */
   splitMaxChars: number
   sendIntervalMs: number
+  /** 上一轮还在跑时新消息的处理策略：merge=攒到轮末合并，insert=立刻插队，hybrid=超时后插队。 */
+  queueMode: 'merge' | 'insert' | 'hybrid'
+  /** hybrid 模式下当前轮跑多久后开始插队（毫秒）。 */
+  interruptAfterMs: number
   dryRun: boolean
   memeEnabled: boolean
   faceFallback: boolean
@@ -212,6 +216,10 @@ export const Config: Z<Config> = z.object({
   outboundImageMaxBytes: z.natural().default(8388608).description('单张待发送图片的大小上限（字节，默认 8MB）').volatile(),
   sendIntervalMs: z.number().default(500)
     .description('分段消息之间的间隔（毫秒），避免 QQ 风控连发；0=不限').volatile(),
+  queueMode: z.union([z.const('merge'), z.const('insert'), z.const('hybrid')]).default('hybrid')
+    .description('上一轮还在跑时新消息怎么处理：merge=攒到本轮结束合并投递；insert=立刻追加进当前轮；hybrid=默认攒着，但当前轮已跑超过 interruptAfterMs 就插队').volatile(),
+  interruptAfterMs: z.number().default(20000)
+    .description('hybrid 模式下，当前轮跑超过这么久（毫秒）就把新消息插队投递，别让群友干等').volatile(),
   reconnectMaxAttempts: z.number().default(0)
     .description('forward 模式连续失败多少次后放弃重连（0=无限重试，退避封顶 60s；日志会限流）').volatile(),
   personaName: z.string().default('default')
@@ -331,6 +339,8 @@ export const DEFAULTS: Config = {
   replyAsQuote: false,
   splitMaxChars: 1200,
   sendIntervalMs: 500,
+  queueMode: 'hybrid',
+  interruptAfterMs: 20000,
   dryRun: false,
   memeEnabled: true,
   faceFallback: true,

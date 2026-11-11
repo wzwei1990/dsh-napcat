@@ -1583,3 +1583,68 @@ test('writeCardInDir / readCardInDir / listCardsInDir 往返', async () => {
   // 不存在的卡返回 undefined
   assert.equal(readCardInDir(dir, '不存在'), undefined)
 })
+
+// ── 2026-11-11 多人群聊回归 ────────────────────────────────────────────────
+// 1) append 冲突不能当会话失效处理（否则正常会话被重置）
+test('isAppendCollision 只认「append 正在发布」这一种错误', async () => {
+  const { isAppendCollision } = await import('../lib/bridge.js')
+  assert.equal(isAppendCollision('session append cannot reenter while another append is being published'), true)
+  assert.equal(isAppendCollision('Error: another append is being published'), true)
+  // 其它投递失败仍要走 recoverChat
+  assert.equal(isAppendCollision('ENOENT: no such file or directory'), false)
+  assert.equal(isAppendCollision('session not found'), false)
+})
+
+// 2) 占位符记录要保留（图片带路径），同一人连发的表情包折叠成 [表情包×N]
+test('appendRecent 保留占位符并折叠连发表情包', async () => {
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const dir = mkdtempSync(join(tmpdir(), 'napcat-noise-'))
+  const store = new MemoryStore({
+    ctx: {}, root: dir, spacePrefix: 'napcat-', backend: 'file',
+    recentLimit: 100, injectRecent: 20, injectMaxChars: 4000, log: () => undefined,
+  })
+  await store.appendRecent('group:9', { nick: '甲', text: '[图片]', at: 1_760_000_000_000 })
+  await store.appendRecent('group:9', { nick: '甲', text: '[视频(12秒)]', at: 1_760_000_001_000 })
+  await store.appendRecent('group:9', { nick: '乙', text: '[表情包]', at: 1_760_000_002_000 })
+  await store.appendRecent('group:9', { nick: '乙', text: '[表情包]', at: 1_760_000_003_000 })
+  await store.appendRecent('group:9', { nick: '乙', text: '[表情包]', at: 1_760_000_004_000 })
+  await store.appendRecent('group:9', { nick: '丙', text: '[图片:napcat-inbox/imgs/a.jpg]', at: 1_760_000_005_000 })
+  await store.appendRecent('group:9', { nick: '丙', text: '这个好看', at: 1_760_000_006_000 })
+  const { readFileSync, readdirSync } = await import('node:fs')
+  const findRecent = (root) => {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      const full = join(root, entry.name)
+      if (entry.isDirectory()) {
+        const hit = findRecent(full)
+        if (hit !== null) return hit
+      } else if (entry.name === 'recent.jsonl') {
+        return full
+      }
+    }
+    return null
+  }
+  const file = findRecent(dir)
+  assert.notEqual(file, null, '应生成 recent.jsonl')
+  const lines = readFileSync(file, 'utf8').split('\n').filter(line => line.trim() !== '')
+  const joined = lines.join('\n')
+  assert.equal(joined.includes('[图片]'), true, '纯图片占位符要保留')
+  assert.equal(joined.includes('[视频(12秒)]'), true, '视频时长是信息，要保留')
+  assert.equal(joined.includes('[表情包×3]'), true, '连发的 3 个表情包应折叠成 ×3')
+  assert.equal(joined.includes('napcat-inbox/imgs/a.jpg'), true, '带路径的图片记录要保留')
+  assert.equal(joined.includes('这个好看'), true)
+  // 乙的三条贴纸折叠后只应剩一行
+  assert.equal(lines.filter(line => line.includes('表情包')).length, 1)
+  rmSync(dir, { recursive: true, force: true })
+})
+
+// 3) 队列策略：merge 等、insert 立刻插、hybrid 跑够久才插
+test('shouldInterrupt 按 queueMode 决定攒着还是插队', async () => {
+  const { shouldInterrupt } = await import('../lib/bridge.js')
+  assert.equal(shouldInterrupt('merge', 999_999, 20_000), false, 'merge 永不插队')
+  assert.equal(shouldInterrupt('insert', 0, 20_000), true, 'insert 总是插队')
+  assert.equal(shouldInterrupt('hybrid', 5_000, 20_000), false, 'hybrid 未到阈值先攒着')
+  assert.equal(shouldInterrupt('hybrid', 20_000, 20_000), true, 'hybrid 到阈值插队')
+  // 阈值下限 1s，防止配成 0 后每条消息都插队
+  assert.equal(shouldInterrupt('hybrid', 500, 0), false)
+  assert.equal(shouldInterrupt('hybrid', 1_000, 0), true)
+})

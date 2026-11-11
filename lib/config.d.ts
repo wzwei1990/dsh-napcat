@@ -46,6 +46,10 @@ export interface Config {
     /** 单条 QQ 消息的最大字数，超出按段落/句子分段发送；0=不分段。 */
     splitMaxChars: number;
     sendIntervalMs: number;
+    /** 上一轮还在跑时新消息的处理策略：merge=攒到轮末合并，insert=立刻插队，hybrid=超时后插队。 */
+    queueMode: 'merge' | 'insert' | 'hybrid';
+    /** hybrid 模式下当前轮跑多久后开始插队（毫秒）。 */
+    interruptAfterMs: number;
     dryRun: boolean;
     memeEnabled: boolean;
     faceFallback: boolean;
