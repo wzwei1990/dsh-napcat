@@ -120,6 +120,9 @@ export interface ChatProactiveState {
 export interface Decision {
     send: boolean;
     reason: string;
+    /** 诊断用：hourly-cap 判定时，近一小时内记账的条数与当时的 cap（2026-11-12 加，用来定位"0 条却报已达上限"）。 */
+    sentInHour?: number;
+    capPerHour?: number;
 }
 /** 解析 "HH:MM-HH:MM,HH:MM-HH:MM" 为分钟区间（支持跨天段，如 23:00-07:00）。 */
 export declare function parseQuietHours(raw: string): Array<[number, number]>;

@@ -1,6 +1,18 @@
 /** 消息段 → 纯文本、@ 判定、长文分段。 */
 
 import type { ObMessage, ObSegment } from './types.js'
+import { faceCatalog } from './faces.js'
+
+/** face id → 中文名（懒建表，一次）。取不到返回空串。 */
+let faceNames: Map<string, string> | undefined
+function faceNameOf(id: string): string {
+  if (id === '') return ''
+  if (faceNames === undefined) {
+    faceNames = new Map()
+    for (const face of faceCatalog()) faceNames.set(face.id, face.name)
+  }
+  return faceNames.get(id) ?? ''
+}
 
 const PLACEHOLDER: Record<string, string> = {
   image: '[图片]',
@@ -159,6 +171,15 @@ export function toText(message: ObMessage | undefined, selfId = '', selfName = '
       const title = cardTitleOf(seg)
       const suffix = [title, ...links].filter(part => part !== '').join(' ')
       parts.push(holder + (suffix === '' ? '' : ' ' + suffix))
+      continue
+    }
+    if (seg.type === 'face' || seg.type === 'mface') {
+      // QQ 原生小黄脸：NapCat 只给 id（如 {type:'face',data:{id:'14'}}）。
+      // 以前统一写成 '[表情]' 把 id 丢了——模型只知道"有人发了个表情"，不知道是微笑还是发怒。
+      // faces.ts 有完整 id→名称 表，这里查出来写成 [表情:微笑]。
+      const id = String((data as { id?: unknown }).id ?? '')
+      const name = faceNameOf(id)
+      parts.push(name === '' ? '[表情]' : '[表情:' + name + ']')
       continue
     }
     const holder = PLACEHOLDER[seg.type]
