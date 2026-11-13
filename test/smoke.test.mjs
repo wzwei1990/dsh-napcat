@@ -1675,3 +1675,49 @@ test('shouldInterrupt 按 queueMode 决定攒着还是插队', async () => {
   assert.equal(shouldInterrupt('hybrid', 500, 0), false)
   assert.equal(shouldInterrupt('hybrid', 1_000, 0), true)
 })
+
+// 小黑盒：从分享链接里取 link_id；接口降级时不抛异常
+test('小黑盒：抽 link_id 与正文块降级', async () => {
+  const { extractHeyboxLink, fetchHeyboxPost, renderHeyboxBlock } = await import('../lib/heybox.js')
+
+  // 线上真实形态（link_id 之外的参数都是分享埋点，不该影响解析）
+  const shared = '看看这个 https://api.xiaoheihe.cn/v3/bbs/app/api/web/share?h_camp=link&h_session_id=De5FTqJMLl9AtmC8&h_src=YXBwX3NoYXJl&link_id=8cc472ceb6a0&new_post_share_style_v2=1 挺好笑的'
+  const ref = extractHeyboxLink(shared)
+  assert.equal(ref?.linkId, '8cc472ceb6a0')
+  assert.match(ref?.url ?? '', /xiaoheihe\.cn/)
+
+  // 不是小黑盒的链接不该被误判
+  assert.equal(extractHeyboxLink('https://example.com/x?link_id=1'), null)
+  assert.equal(extractHeyboxLink('没有链接'), null)
+
+  // 接口返回：text 是文本块序列化 JSON，里面混了图片块
+  const payload = {
+    status: 'ok',
+    result: {
+      link: {
+        title: '孩子们，听说魂哥的雷霆摄像头是少主推荐他买的',
+        description: '一段摘要',
+        text: JSON.stringify([
+          { type: 'text', text: '第一段正文' },
+          { type: 'img', url: 'https://cdn/x.jpg' },
+          { type: 'text', text: '第二段正文' },
+        ]),
+        user: { username: '老吃家贵州良子-书' },
+      },
+    },
+  }
+  const fakeFetch = async () => ({ ok: true, json: async () => payload })
+  const post = await fetchHeyboxPost('8cc472ceb6a0', { fetchImpl: fakeFetch })
+  assert.equal(post?.title, payload.result.link.title)
+  assert.equal(post?.author, '老吃家贵州良子-书')
+  assert.deepEqual(post?.paragraphs, ['第一段正文', '第二段正文'])
+  assert.match(renderHeyboxBlock(post), /标题：/)
+
+  // 风控/结构变更：status 不是 ok → 返回 null（调用方回落到通用提示）
+  const badFetch = async () => ({ ok: true, json: async () => ({ status: 'error' }) })
+  assert.equal(await fetchHeyboxPost('8cc472ceb6a0', { fetchImpl: badFetch }), null)
+
+  // 网络异常也不该抛
+  const throwFetch = async () => { throw new Error('boom') }
+  assert.equal(await fetchHeyboxPost('8cc472ceb6a0', { fetchImpl: throwFetch }), null)
+})

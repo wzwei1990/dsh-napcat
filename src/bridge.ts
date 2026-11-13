@@ -44,6 +44,7 @@ import { findKeyword, mentions, repliesTo, repliesToAny, segmentsOf, shortHash, 
 import { MemoryStore } from './memory.js'
 import { GameWiki } from './gamewiki.js'
 import { BiliLink, extractBiliLink } from './bililink.js'
+import { extractHeyboxLink, fetchHeyboxPost, renderHeyboxBlock } from './heybox.js'
 import { BiliPusher, formatPush } from './bilipush.js'
 import { workspaceDirFor } from './workspace.js'
 import { SubscriptionStore, pollSubscription } from './subscriptions.js'
@@ -1019,6 +1020,17 @@ export class Bridge {
         }
         this.opts.log('debug', '链接解析失败，回落通用提示: ' + media.kind)
       }
+      // 小黑盒：分享链接里带 link_id，直接查官方接口拿标题/摘要/正文，
+      // 免得模型去 web_fetch 一个 JS 壳页面。失败仍回落到下面的通用提示。
+      const heybox = extractHeyboxLink(line)
+      if (heybox !== null) {
+        const post = await fetchHeyboxPost(heybox.linkId)
+        if (post !== null) {
+          this.opts.log('debug', '小黑盒已解析: ' + post.title.slice(0, 40))
+          return renderHeyboxBlock(post) + '\n'
+        }
+        this.opts.log('debug', '小黑盒解析失败，回落通用提示: link_id=' + heybox.linkId)
+      }
       const url = match[0].slice(0, 200)
       const who = line.split('：')[0]?.trim() ?? ''
       return '【最新话题是一条链接' + (who === '' ? '' : '（' + who.slice(0, 20) + ' 发的）') + '】' + url + '\n'
@@ -1861,9 +1873,29 @@ export class Bridge {
       const ctxAny = this.opts.ctx as unknown as { get?(name: string): unknown; attachments?: unknown }
       const attachments = (ctxAny.get?.('attachments') ?? ctxAny.attachments) as {
         admitPromptContent?(parts: Array<{ type: 'image'; mediaType: string; data: string; name?: string }>): Promise<unknown[]>
+        validateImage?(input: { data: Buffer; mediaType: string; name?: string }): Promise<void>
+        saveImage?(input: { data: Buffer; mediaType: string; name?: string }): Promise<unknown>
       } | undefined
+
+      // 优先走附件库（与 qfish 同形态）：saveImage 返回附件句柄，消息里放 { type:'image', attachment }。
+      // 关键差别：只有"附件出现"才能被宿主的 compaction-image-offload 剔除；
+      // 裸 base64 的 admitPromptContent 在超图片预算时 offloadOldestImages 找不到可剔项，
+      // 于是不重试、整轮丢失（2026-11-12 线上日志 IMAGE_OFFLOAD_REQUIRED 即此）。
+      if (attachments?.saveImage !== undefined) {
+        if (attachments.validateImage !== undefined) {
+          await attachments.validateImage({ data: buffer, mediaType, name })
+        }
+        const attachment = await attachments.saveImage({ data: buffer, mediaType, name })
+        const block = { type: 'image', attachment } as unknown as ContentBlock
+        out.blocks.push(block)
+        // 不要再额外塞一份裸 base64：admitImage 的 blocks 已经是可被宿主 offload 的"附件出现"，
+        // 再往 parts 里放一份原始数据会让同一张图在请求里出现两次，且裸数据无法被剔除。
+        this.debugLog(cwd, 'saveImage ok 走附件库（可被宿主 offload）')
+        return out
+      }
+
       if (attachments?.admitPromptContent === undefined) {
-        this.debugLog(cwd, '宿主没有 admitPromptContent')
+        this.debugLog(cwd, '宿主既没有 saveImage 也没有 admitPromptContent，只给路径')
         return out
       }
       const admitted = await attachments.admitPromptContent([
@@ -1872,8 +1904,9 @@ export class Bridge {
       for (const part of admitted) {
         if ((part as { type?: string }).type === 'image') out.blocks.push(part as ContentBlock)
       }
-      if (out.blocks.length > 0) out.part = { type: 'image', mediaType, data: buffer.toString('base64'), name }
-      this.debugLog(cwd, 'admit ok admitted=' + admitted.length + ' blocks=' + out.blocks.length)
+      // 回落路径：admitPromptContent 返回的同样是"持久引用"，直接进 blocks 即可；
+      // 不再额外生成裸 base64 的 part（否则同一张图在请求里出现两次且裸数据不可剔除）。
+      this.debugLog(cwd, 'admit ok（回落到 admitPromptContent）admitted=' + admitted.length + ' blocks=' + out.blocks.length)
     } catch (error) {
       this.debugLog(cwd, 'admit 失败: ' + describe(error))
       this.opts.log('warn', 'admitPromptContent 失败: ' + describe(error))
