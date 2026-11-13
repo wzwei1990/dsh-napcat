@@ -604,18 +604,32 @@ export class Bridge {
         }).catch(() => undefined)
       }
     }
-    // 推送：每群按自己的 chatKey 取队列
-    if (!this.biliPusher.hasService()) return
+    // 推送：每群按自己的 chatKey 取队列。
+    // 注意：队列在本插件自己的 SubscriptionStore 里（queue.jsonl），与 dsh-bili 无关，
+    // 所以不能再用 biliPusher.hasService() 当门——新版 dsh-bili 已移除 pending/ack
+    // 这套"数据源代管推送"的接口（改为只提供数据、推送归渠道插件），那道检查会恒为 false，
+    // 导致队列里的条目永远发不出去（2026-11-13 实测：4 条待推送 9 分钟没投递）。
+    // 没有 dsh-bili 时 provider 取不到数据，队列自然为空，不需要额外判空。
     const minuteOfDay = new Date(now).getHours() * 60 + new Date(now).getMinutes()
     if (this.biliPusher.inQuietHours(minuteOfDay)) return
     for (const [key, chat] of this.chats) {
       if (chat.ref.kind !== 'group') continue
       const taken = this.subStore.pending('napcat:' + key, Math.max(1, this.opts.config.biliPushMaxPerPush), key)
       if (taken.length === 0) continue
+      // 旧内容不再推：超过 24h 的条目直接 ack 丢弃（用户 2026-11-13 明确"旧的不发了"）。
+      // 启动时 pruneStale 也会清一次，这里是长跑进程的兜底。
+      const cutoff = now - 24 * 60 * 60_000
+      const stale = taken.filter(item => (item.addedAt ?? 0) < cutoff)
+      const fresh = taken.filter(item => (item.addedAt ?? 0) >= cutoff)
+      if (stale.length > 0) {
+        await this.subStore.ack(stale.map(item => item.id), 'napcat:' + key).catch(() => undefined)
+        this.opts.log('info', '订阅推送 ' + key + '：丢弃 ' + String(stale.length) + ' 条超过 24h 的旧推送')
+      }
+      if (fresh.length === 0) continue
       try {
-        await this.sendText(chat, formatPush(taken as never))
-        await this.subStore.ack(taken.map(item => item.id), 'napcat:' + key)
-        this.opts.log('info', '订阅推送 ' + key + '：' + taken.length + ' 条')
+        await this.sendText(chat, formatPush(fresh as never))
+        await this.subStore.ack(fresh.map(item => item.id), 'napcat:' + key)
+        this.opts.log('info', '订阅推送 ' + key + '：' + fresh.length + ' 条')
       } catch (error) {
         this.opts.log('warn', '订阅推送失败 ' + key + '（下次重试）: ' + describe(error))
       }

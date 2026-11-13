@@ -92,6 +92,21 @@ export declare class SubscriptionStore {
     due(now?: number, limit?: number): Subscription[];
     pending(consumer?: string, limit?: number, target?: string): QueueItem[];
     ack(ids: readonly string[], consumer: string, keep?: number): Promise<void>;
+    /**
+     * 启动清理（2026-11-13）：
+     *   ① 丢掉 `groups` 为空的订阅（用户确认过：这类"只进队列不推送"的订阅是历史尾巴，没人要）
+     *   ② 丢掉 subKey 已不存在于订阅表的队列项（孤儿）
+     *   ③ 丢掉超过 maxAgeMs 的旧队列项（默认 24h；旧内容再推出去只会是噪音）
+     * 只写变化过的文件，返回实际删掉的条数，供调用方打日志。
+     */
+    pruneStale(options?: {
+        maxAgeMs?: number;
+        now?: number;
+    }): Promise<{
+        subs: number;
+        orphans: number;
+        expired: number;
+    }>;
     push(items: readonly Omit<QueueItem, 'addedAt' | 'deliveredTo'>[]): Promise<number>;
 }
 export interface PollOptions {

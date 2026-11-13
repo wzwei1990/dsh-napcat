@@ -241,6 +241,38 @@ export class SubscriptionStore {
     }
   }
 
+  /**
+   * 启动清理（2026-11-13）：
+   *   ① 丢掉 `groups` 为空的订阅（用户确认过：这类"只进队列不推送"的订阅是历史尾巴，没人要）
+   *   ② 丢掉 subKey 已不存在于订阅表的队列项（孤儿）
+   *   ③ 丢掉超过 maxAgeMs 的旧队列项（默认 24h；旧内容再推出去只会是噪音）
+   * 只写变化过的文件，返回实际删掉的条数，供调用方打日志。
+   */
+  async pruneStale(options: { maxAgeMs?: number; now?: number } = {}): Promise<{ subs: number; orphans: number; expired: number }> {
+    const now = options.now ?? Date.now()
+    const maxAgeMs = options.maxAgeMs ?? 24 * 60 * 60_000
+    const emptyGroups = this.subs.filter(sub => sub.groups.length === 0)
+    if (emptyGroups.length > 0) {
+      this.subs = this.subs.filter(sub => sub.groups.length > 0)
+      await this.save()
+      this.log('info', '清理订阅：丢掉了 ' + String(emptyGroups.length) + ' 个 groups 为空的订阅（'
+        + emptyGroups.map(sub => sub.name + '(' + sub.key + ')').join('、') + '）')
+    }
+    const aliveKeys = new Set(this.subs.map(sub => sub.key))
+    const before = this.queue.length
+    const kept = this.queue.filter(item => aliveKeys.has(item.subKey) && now - (item.addedAt ?? 0) <= maxAgeMs)
+    const orphans = this.queue.filter(item => !aliveKeys.has(item.subKey)).length
+    const expired = before - orphans - kept.length
+    if (kept.length !== before) {
+      this.queue = kept
+      await mkdir(dirname(this.queueFile), { recursive: true })
+      const body = this.queue.map(item => JSON.stringify(item)).join('\n') + (this.queue.length > 0 ? '\n' : '')
+      await writeFile(this.queueFile, body, 'utf8')
+      this.log('info', '清理队列：孤儿 ' + String(orphans) + ' 条、过期(>' + String(Math.round(maxAgeMs / 3_600_000)) + 'h) ' + String(expired) + ' 条')
+    }
+    return { subs: emptyGroups.length, orphans, expired }
+  }
+
   async push(items: readonly Omit<QueueItem, 'addedAt' | 'deliveredTo'>[]): Promise<number> {
     if (items.length === 0) return 0
     await mkdir(dirname(this.queueFile), { recursive: true })

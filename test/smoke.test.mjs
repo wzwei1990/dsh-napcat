@@ -1721,3 +1721,42 @@ test('小黑盒：抽 link_id 与正文块降级', async () => {
   const throwFetch = async () => { throw new Error('boom') }
   assert.equal(await fetchHeyboxPost('8cc472ceb6a0', { fetchImpl: throwFetch }), null)
 })
+
+// 启动清理：groups 为空的订阅、孤儿队列项、超过 24h 的旧条目都要被丢掉
+test('订阅清理：空 groups 订阅 / 孤儿队列 / 过期条目', async () => {
+  const { SubscriptionStore } = await import('../lib/subscriptions.js')
+  const { mkdtempSync, writeFileSync, readFileSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+
+  const dir = mkdtempSync(join(tmpdir(), 'napcat-sub-'))
+  const now = Date.UTC(2026, 10, 13, 4, 0, 0)
+  const dayMs = 24 * 60 * 60_000
+  const sub = (key, groups) => ({
+    id: 'bili:' + key, provider: 'bili', key, name: 'UP-' + key, types: ['video'],
+    groups, lastSeenPubdate: 0, recentIds: [], failures: 0, nextCheckAt: 0, enabled: true, createdAt: now,
+  })
+  writeFileSync(join(dir, 'subscriptions.json'), JSON.stringify({
+    subscriptions: [sub('111', ['group:1']), sub('222', [])],
+  }), 'utf8')
+  const queueItem = (id, subKey, addedAt) => JSON.stringify({
+    id, kind: 'video', title: id, url: 'https://x/' + id, pubdate: 0,
+    provider: 'bili', providerLabel: 'B站', subKey, subName: 'UP', groups: ['group:1'], addedAt, deliveredTo: [],
+  })
+  writeFileSync(join(dir, 'queue.jsonl'), [
+    queueItem('fresh', '111', now - 60_000),      // 保留
+    queueItem('expired', '111', now - 2 * dayMs), // 过期 → 丢
+    queueItem('orphan', '999', now - 60_000),     // 孤儿 → 丢
+  ].join('\n') + '\n', 'utf8')
+
+  const store = new SubscriptionStore({ dir })
+  await store.load()
+  const removed = await store.pruneStale({ now, maxAgeMs: dayMs })
+  assert.deepEqual(removed, { subs: 1, orphans: 1, expired: 1 })
+  assert.equal(store.list().length, 1, '空 groups 的订阅被丢掉')
+  assert.equal(store.list()[0].key, '111', '留下的是有推送目标的订阅')
+
+  const lines = readFileSync(join(dir, 'queue.jsonl'), 'utf8').split('\n').filter(Boolean)
+  assert.equal(lines.length, 1, '只剩一条没过期、且 subKey 仍存在的条目')
+  assert.match(lines[0], /"fresh"/)
+})
