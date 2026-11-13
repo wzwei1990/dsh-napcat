@@ -192,6 +192,33 @@ test('主动发言：静默时段 / 泊松 / 退避 / 门槛', () => {
   const cooling = decide({ now, minuteOfDay: 600, options: base, state: { ...newChatState(), lastSpokeAt: now - 10_000 }, recentOthers: 5, random: () => 0 })
   assert.equal(cooling.reason, 'cooldown')
 })
+
+// 每小时上限按"本滚动小时达到过的最高档"算（B 方案）：
+// 否则热聊时发过 1 条、热度回落到寒暄档（上限 1）后会被追溯判超限，整小时锁死。
+test('每小时上限：热度回落后不追溯判超限', () => {
+  const now = Date.UTC(2026, 10, 12, 10, 0, 0)
+  const options = {
+    enabled: true, ratePerHour: 4, cooldownMinutes: 5, quietHours: '', hotMessages: 1,
+    heatScaling: true,
+  }
+  const mkState = () => ({ ...newChatState(), lastSpokeAt: now - 20 * 60_000, sentAt: [now - 30 * 60_000] })
+  const input = (state, tier) => ({
+    now, minuteOfDay: 720, options, state, recentOthers: 5,
+    lastMessageAt: now - 10_000, heat: { score: tier === 'hot' ? 7 : 0, tier }, random: () => 0,
+  })
+
+  // 对照组：从未在热聊档记过 peak → 寒暄档上限 1，已发 1 条 → 判超限
+  const coldOnly = decide(input(mkState(), 'low'))
+  assert.equal(coldOnly.reason, 'hourly-cap')
+  assert.equal(coldOnly.sentInHour, 1)
+  assert.equal(coldOnly.capPerHour, 1)
+
+  // 实验组：同一小时先在热聊档记下 peak=6，再回落到寒暄档 → 不应再判超限
+  const shared = mkState()
+  decide(input(shared, 'hot'))
+  const afterDrop = decide(input(shared, 'low'))
+  assert.notEqual(afterDrop.reason, 'hourly-cap')
+})
 test('图片缓存：日期键与 URL 去重 hash', () => {
   const t = Date.UTC(2026, 9, 23, 4, 0, 0) // 本地 2026-10-23 12:00
   assert.equal(dayKey(t).length, 8)

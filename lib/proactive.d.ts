@@ -102,20 +102,16 @@ export interface ChatProactiveState {
     hotJumpAt?: number;
     /** 上次"考虑"的时间（ms） */
     lastConsiderAt: number;
-}
-export interface ChatProactiveState {
-    /** 上次成功发言时间（ms） */
-    lastSpokeAt: number;
-    /** 最近一小时内的发言时间（ms） */
-    sentAt: number[];
-    /** 连续被模型 __SKIP__ 的次数（用于退避） */
-    skipStreak: number;
-    /** 上次跳过的时间（ms）；太久没跳过就把退避清零，避免永久变安静 */
-    lastSkipAt?: number;
-    /** 上次热点跳队的时间（ms）：一小时最多跳一次 */
-    hotJumpAt?: number;
-    /** 上次"考虑"的时间（ms） */
-    lastConsiderAt: number;
+    /**
+     * 本滚动小时里达到过的最高档上限。
+     * 热量档会回落（热聊→闲聊→寒暄），若上限跟着即时下调，就会出现
+     * "热聊时发了 3 条，冷下来按寒暄档上限 1 算 → 这一小时彻底不能再说话"。
+     * 取本小时见过的最高上限，已发言就不会被追溯性判超限。
+     */
+    capPeak?: {
+        windowStart: number;
+        cap: number;
+    };
 }
 export interface Decision {
     send: boolean;

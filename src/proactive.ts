@@ -190,21 +190,13 @@ export interface ChatProactiveState {
   hotJumpAt?: number
   /** 上次"考虑"的时间（ms） */
   lastConsiderAt: number
-}
-
-export interface ChatProactiveState {
-  /** 上次成功发言时间（ms） */
-  lastSpokeAt: number
-  /** 最近一小时内的发言时间（ms） */
-  sentAt: number[]
-  /** 连续被模型 __SKIP__ 的次数（用于退避） */
-  skipStreak: number
-  /** 上次跳过的时间（ms）；太久没跳过就把退避清零，避免永久变安静 */
-  lastSkipAt?: number
-  /** 上次热点跳队的时间（ms）：一小时最多跳一次 */
-  hotJumpAt?: number
-  /** 上次"考虑"的时间（ms） */
-  lastConsiderAt: number
+  /**
+   * 本滚动小时里达到过的最高档上限。
+   * 热量档会回落（热聊→闲聊→寒暄），若上限跟着即时下调，就会出现
+   * "热聊时发了 3 条，冷下来按寒暄档上限 1 算 → 这一小时彻底不能再说话"。
+   * 取本小时见过的最高上限，已发言就不会被追溯性判超限。
+   */
+  capPeak?: { windowStart: number; cap: number }
 }
 
 export interface Decision {
@@ -314,7 +306,16 @@ export function decide(input: {
   }
 
   const sent = pruneSentAt(state.sentAt, now)
-  if (sent.length >= capPerHour) return { send: false, reason: 'hourly-cap', sentInHour: sent.length, capPerHour }
+  // B 方案：上限取"本滚动小时里达到过的最高档上限"。
+  // 否则热聊时发过 3 条、热度回落到寒暄档后上限变 1，已发 3 ≥ 1 → 这一小时被彻底锁死。
+  const windowStart: number = sent.length > 0 ? sent[0]! : now
+  const peak = state.capPeak
+  const sameWindow = peak !== undefined && Math.abs(peak.windowStart - windowStart) < 60_000
+  const effectiveCap = sameWindow ? Math.max(capPerHour, peak!.cap) : capPerHour
+  state.capPeak = { windowStart, cap: effectiveCap }
+  if (sent.length >= effectiveCap) {
+    return { send: false, reason: 'hourly-cap', sentInHour: sent.length, capPerHour: effectiveCap }
+  }
 
   // 话题门槛：热量自适应下用热量分判断（寒暄刷屏 heat=0 直接不插话），
   // 否则沿用旧的"窗口内消息条数"门槛。
