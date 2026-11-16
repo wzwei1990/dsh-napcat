@@ -795,6 +795,12 @@ export class Bridge {
     if ((this.mutedUntil.get(ref.key) ?? 0) > Date.now()) return
     const state = this.proactiveStates.get(ref.key) ?? newChatState()
     const now = Date.now()
+    // 上一轮主动发言还在跑（模型还没出结果）：这一轮直接跳过，别再掷骰子。
+    // 否则会并发派发两轮 → 两条消息只隔一分钟左右（2026-11-16 实测：11:06 两条相隔 62.6 秒）。
+    // pendingProactive 在派发后才有、lastSpokeAt 要等 turn/end 才写，两者都盖不住"正在跑"这段窗口。
+    if (this.pendingProactive.has(ref.key)) return
+    const inflightAt = this.proactiveStartedAt.get(ref.key)
+    if (inflightAt !== undefined && inflightAt !== 0 && now - inflightAt < 3 * 60_000) return
     // 同群 20 秒内不重复评估：定时评估与消息触发会同时进来，避免重复掷骰子
     if (state.lastConsiderAt !== 0 && now - state.lastConsiderAt < 20_000) return
     const windowMs = windowMsOf({ cooldownMinutes: cfg.proactiveCooldownMinutes })
@@ -817,8 +823,10 @@ export class Bridge {
     const recentOthers = (this.chatter.get(ref.key) ?? []).filter(at => now - at < windowMs).length
     // 只有定时 tick 掷骰子：消息触发时也掷的话，等于把 3 次/小时的速率放大成 8~10 次/小时
     if (!fromTick) {
-      state.lastConsiderAt = now
-      this.proactiveStates.set(ref.key, state)
+      // 这里**不能**写 state.lastConsiderAt：它是 decide() 算 elapsed（泊松间隔）的基准，
+      // 每来一条群消息就刷新它 ⇒ 定时 tick 真正掷骰子时 elapsed 只剩 20 秒地板，
+      // 概率从热聊档 12.5% 被压到 ~4%，再叠加 skipBackoff 减半 → 连续 poisson-miss，
+      // 表现就是"聊得最热的时候突然哑了"（2026-11-16 线上：08:35 后近两小时 0 次发言）。
       return
     }
     // 上一轮主动发言如果超过 3 分钟还没结束（模型卡住/事件丢失），把标记清掉，否则会永远不再评估
@@ -875,6 +883,12 @@ export class Bridge {
       this.opts.log('info', '主动发言评估已启动: ' + ref.key + '（窗口内他人消息 ' + recentOthers + ' 条）')
     }
     state.lastConsiderAt = now
+    // 掷骰子通过就立刻落 in-flight 标记：后面构建记忆/附件的 await 期间，
+    // 下一分钟的 tick 不应再掷一次（否则两轮并发、两条消息相隔一分钟）。
+    if (decision.send) {
+      this.pendingProactive.add(ref.key)
+      this.proactiveStartedAt.set(ref.key, now)
+    }
     if (decision.send && state.lastSpokeAt !== 0 && now - state.lastSpokeAt < cfg.proactiveCooldownMinutes * 60_000) {
       // 冷却期内还能发，说明走的是热点跳队：记时间，一小时只允许一次
       state.hotJumpAt = now
@@ -890,7 +904,7 @@ export class Bridge {
       stat.lastReason = decision.reason
       if (now - stat.at > 30 * 60_000) {
         this.opts.log('info', '主动发言评估 ' + String(stat.count) + ' 次未触发（最后原因 ' + decision.reason
-          + '，近 ' + Math.round(windowMs / 60_000) + ' 分钟他人消息 ' + recentOthers + ' 条，热量 ' + heat.heat + '（' + heat.tier + '），λ=' + cfg.proactiveRatePerHour
+          + '，近 ' + Math.round(windowMs / 60_000) + ' 分钟他人消息 ' + recentOthers + ' 条，热量 ' + heat.heat + '（' + heat.tier + '），λ=' + (decision.effectiveRate ?? cfg.proactiveRatePerHour).toFixed(2) + '/h，冷却 ' + (decision.effectiveCooldown ?? cfg.proactiveCooldownMinutes) + ' 分钟'
           + '，skipStreak=' + state.skipStreak + '）: ' + ref.key)
         stat.count = 0
         stat.at = now
@@ -958,8 +972,6 @@ export class Bridge {
             + '全部做完后再照常插话（没有想说的仍然回 __SKIP__）。这一步只做一次，之后本群就有记忆空间了。'
           : '\n\n【本轮小提醒】如果上面的近期群聊里出现了值得长期记住的新信息（新人设/称呼/黑话/重要约定），可以顺手调用 mnemon_remember 记 1 条（最多 1 条，没实质内容就不记）；这只是附带动作，不要因此改变插话的语气。'
       }
-      this.pendingProactive.add(ref.key)
-    this.proactiveStartedAt.set(ref.key, Date.now())
       // 优先参考最近几条，但不是"只准接最后一句"：允许结合更早的上下文与长期记忆来回
       const lastThree = recent.slice(-3)
       const latestSpeaker = lastThree.length === 0 ? '' : lastThree[lastThree.length - 1] ?? ''

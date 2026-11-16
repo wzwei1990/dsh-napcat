@@ -205,6 +205,9 @@ export interface Decision {
   /** 诊断用：hourly-cap 判定时，近一小时内记账的条数与当时的 cap（2026-11-12 加，用来定位"0 条却报已达上限"）。 */
   sentInHour?: number
   capPerHour?: number
+  /** 诊断用：本次掷骰子实际用的 λ（次/小时）与冷却分钟数（档位生效时与配置值可能不同）。 */
+  effectiveRate?: number
+  effectiveCooldown?: number
 }
 
 /** 解析 "HH:MM-HH:MM,HH:MM-HH:MM" 为分钟区间（支持跨天段，如 23:00-07:00）。 */
@@ -251,7 +254,9 @@ export function poissonHit(ratePerHour: number, elapsedMs: number): number {
  */
 export function skipBackoffFactor(skipStreak: number): number {
   if (skipStreak <= 0) return 1
-  return 1 / Math.min(2, 2 ** skipStreak)
+  // 下限 0.75（而不是 0.5）：连续"觉得没必要说"时最多降 25% 频率，
+  // 否则热聊里被模型跳几次就会明显变哑（2026-11-16 线上两小时 0 条的诱因之一）
+  return Math.max(0.75, 1 / 2 ** Math.min(2, skipStreak))
 }
 
 export function newChatState(): ChatProactiveState {
@@ -292,7 +297,8 @@ export function decide(input: {
   // 档位：热量自适应开启且拿到热量分时用三档参数，否则沿用配置里的固定值
   const scaling = options.heatScaling !== false && input.heat !== undefined
   const tier = scaling ? tierParamsOf(input.heat!.tier) : undefined
-  const cooldownMinutes = tier?.cooldownMinutes ?? options.cooldownMinutes
+  // 防刷屏底线：配置里的冷却分钟数是最小间隔的下限，档位只能更保守（例如热聊档 3 分钟 → 取 max(3, 配置 5) = 5）
+  const cooldownMinutes = Math.max(tier?.cooldownMinutes ?? 0, options.cooldownMinutes)
   const capPerHour = tier?.capPerHour ?? maxPerHourOf(options)
 
   // 冷却门：默认闭嘴（防刷屏）。但"突然爆话题"时允许提前插一次，
@@ -302,7 +308,7 @@ export function decide(input: {
     const recentHot = input.recentHot ?? 0
     const lastJump = state.hotJumpAt ?? 0
     const jumpable = recentHot >= hotJumpThresholdOf(options) && (lastJump === 0 || now - lastJump > 60 * 60_000)
-    if (!jumpable) return { send: false, reason: 'cooldown' }
+    if (!jumpable) return { send: false, reason: 'cooldown', effectiveCooldown: cooldownMinutes }
   }
 
   const sent = pruneSentAt(state.sentAt, now)
@@ -343,6 +349,8 @@ export function decide(input: {
   if (baseRate <= 0) return { send: false, reason: 'rate-zero' }
   // 没开热量自适应时保留旧的"聊得越热闹机会越多"（1~3 倍）
   const boost = scaling ? 1 : Math.min(3, Math.max(1, 1 + input.recentOthers / 8))
-  const probability = poissonHit(baseRate * boost * skipBackoffFactor(state.skipStreak), elapsed)
-  return random() < probability ? { send: true, reason: 'poisson' } : { send: false, reason: 'poisson-miss' }
+  const effectiveRate = baseRate * boost * skipBackoffFactor(state.skipStreak)
+  const probability = poissonHit(effectiveRate, elapsed)
+  const diag = { effectiveRate, effectiveCooldown: cooldownMinutes }
+  return random() < probability ? { send: true, reason: 'poisson', ...diag } : { send: false, reason: 'poisson-miss', ...diag }
 }

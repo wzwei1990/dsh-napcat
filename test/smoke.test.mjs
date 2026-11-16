@@ -170,10 +170,11 @@ test('主动发言：静默时段 / 泊松 / 退避 / 门槛', () => {
 
   assert.ok(Math.abs(poissonHit(2, 30 * 60_000) - 0.632) < 0.01)
   assert.ok(poissonHit(0, 1000) === 0)
+  // 下限从 0.5 提到 0.75（2026-11-16）：连续跳过只降 25%，避免热聊时被跳几次就变哑
   assert.equal(skipBackoffFactor(0), 1)
-  assert.equal(skipBackoffFactor(1), 0.5)
-  assert.equal(skipBackoffFactor(2), 0.5)
-  assert.equal(skipBackoffFactor(5), 0.5)
+  assert.equal(skipBackoffFactor(1), 0.75)
+  assert.equal(skipBackoffFactor(2), 0.75)
+  assert.equal(skipBackoffFactor(5), 0.75)
 
   const base = {
     enabled: true, ratePerHour: 50, cooldownMinutes: 1, quietHours: '', hotMessages: 3,
