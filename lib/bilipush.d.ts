@@ -18,6 +18,9 @@ export interface BiliOutboxItem {
     subName: string;
     providerLabel: string;
     extra?: string;
+    /** 封面/配图 URL（有就发图，失败退回纯文字） */
+    coverUrl?: string;
+    images?: string[];
 }
 /** dsh-bili 暴露的订阅服务（只依赖这一小部分） */
 export interface BiliSubService {
@@ -34,7 +37,9 @@ export interface BiliPushOptions {
     log: (level: 'debug' | 'info' | 'warn', message: string) => void;
 }
 declare function clockOf(seconds: number): string;
-/** 把若干条更新拼成一条群消息 */
+/** 单条更新 → 推送文字（与封面图配对发送） */
+export declare function formatItem(item: BiliOutboxItem): string;
+/** 把若干条更新拼成一条群消息（没有封面的兜底格式） */
 export declare function formatPush(items: readonly BiliOutboxItem[]): string;
 export declare class BiliPusher {
     private readonly options;

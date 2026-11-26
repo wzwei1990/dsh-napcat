@@ -7,6 +7,10 @@ export interface FeedItem {
     url: string;
     pubdate: number;
     extra?: string;
+    /** 封面/配图 URL（推送时尽量发图，失败再退回纯文字） */
+    coverUrl?: string;
+    /** 动态的多张配图（当前只发第一张，其余信息写在 extra） */
+    images?: string[];
 }
 /** 一个数据源（B 站、抖音…）要实现的东西 */
 export interface FeedProvider {

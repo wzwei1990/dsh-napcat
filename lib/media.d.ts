@@ -48,3 +48,10 @@ export declare function downloadToFileStream(url: string, dir: string, name: str
     path: string;
     bytes: number;
 }>;
+/** 远端图片 → base64://（可带 Referer 等头；B 站图床对 Referer 敏感） */
+export declare function normalizeRemoteUrl(raw: string): string;
+export declare function fetchToBase64Url(url: string, maxBytes: number, headers?: Record<string, string>): Promise<{
+    url: string;
+    bytes: number;
+    name: string;
+}>;

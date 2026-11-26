@@ -15,11 +15,19 @@ import type { FeedItem, FeedProvider, FeedType } from './subscriptions.js'
 export interface BiliServiceLike {
   resolveUp?: (target: string) => Promise<{ mid: number; name: string; fans?: number }>
   searchUser?: (query: string) => Promise<Array<{ mid: number; name: string; fans?: number }>>
-  upVideos?: (mid: number, page?: number, pageSize?: number) => Promise<Array<{ bvid: string; title: string; pubdate: number; durationSec: number; url: string }>>
-  upDynamics?: (mid: number, limit?: number) => Promise<Array<{ id: string; type: string; text: string; pubdate: number; url: string; imageCount: number }>>
+  upVideos?: (mid: number, page?: number, pageSize?: number) => Promise<Array<{ bvid: string; title: string; pubdate: number; durationSec: number; url: string; cover?: string }>>
+  upDynamics?: (mid: number, limit?: number) => Promise<Array<{ id: string; type: string; text: string; pubdate: number; url: string; imageCount: number; images?: string[] }>>
   /** 空间接口风控剩余时间（ms），0=正常 */
   spaceRiskRemainingMs?: () => number
   search?: (query: string, options?: { page?: number; order?: string; duration?: number }) => Promise<{ hits: Array<{ bvid: string; title: string; up: string; mid: number; play: number; durationSec: number; url: string }>; total: number }>
+}
+
+/** 播放量/点赞数 → 1.2万 / 3.4亿 */
+export function humanCount(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return ''
+  if (value >= 100_000_000) return (value / 100_000_000).toFixed(1).replace(/\.0$/, '') + '亿'
+  if (value >= 10_000) return (value / 10_000).toFixed(1).replace(/\.0$/, '') + '万'
+  return String(Math.round(value))
 }
 
 export interface ProviderRegistryOptions {
@@ -92,7 +100,14 @@ export class BiliFeedProvider implements FeedProvider {
             title: video.title,
             url: video.url,
             pubdate: video.pubdate,
-            ...(video.durationSec > 0 ? { extra: Math.round(video.durationSec / 60) + ' 分钟' } : {}),
+            ...(() => {
+              const parts: string[] = []
+              if (video.durationSec > 0) parts.push(Math.round(video.durationSec / 60) + ' 分钟')
+              const play = humanCount(Number((video as { play?: unknown }).play ?? 0))
+              if (play !== '') parts.push(play + ' 播放')
+              return parts.length > 0 ? { extra: parts.join(' · ') } : {}
+            })(),
+            ...(typeof video.cover === 'string' && video.cover !== '' ? { coverUrl: video.cover } : {}),
           })
         }
       } catch (error) {
@@ -124,6 +139,9 @@ export class BiliFeedProvider implements FeedProvider {
           url: dynamic.url,
           pubdate: dynamic.pubdate,
           ...(dynamic.imageCount > 0 ? { extra: dynamic.imageCount + ' 张图' } : {}),
+          ...(Array.isArray(dynamic.images) && dynamic.images.length > 0
+            ? { coverUrl: dynamic.images[0], images: dynamic.images.slice(0, 9) }
+            : {}),
         })
       }
     }

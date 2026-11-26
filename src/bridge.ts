@@ -45,7 +45,7 @@ import { MemoryStore } from './memory.js'
 import { GameWiki } from './gamewiki.js'
 import { BiliLink, extractBiliLink } from './bililink.js'
 import { extractHeyboxLink, fetchHeyboxPost, renderHeyboxBlock } from './heybox.js'
-import { BiliPusher, formatPush } from './bilipush.js'
+import { BiliPusher, formatItem, formatPush } from './bilipush.js'
 import { workspaceDirFor } from './workspace.js'
 import { SubscriptionStore, pollSubscription } from './subscriptions.js'
 import { ProviderRegistry } from './providers.js'
@@ -55,7 +55,7 @@ import { faceFor } from './faces.js'
 import { defaultMemeDirs, MemeLibrary, readMemeSettings } from './meme.js'
 import { localToBase64Url } from './media.js'
 import { decide, FRESH_SECONDS, HOT_WINDOW_MS, inQuietHours, maxPerHourOf, newChatState, parseQuietHours, pruneSentAt, scoreHeat, windowMsOf, type ChatProactiveState, type RecentMessage } from './proactive.js'
-import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, DEFAULT_MAX_VIDEO_BYTES, base64UrlToBuffer, downloadToFile, downloadToFileStream, ensureInbox, imageMediaType, nameFromRef, pruneInbox } from './media.js'
+import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, DEFAULT_MAX_VIDEO_BYTES, base64UrlToBuffer, downloadToFile, downloadToFileStream, ensureInbox, fetchToBase64Url, imageMediaType, nameFromRef, pruneInbox } from './media.js'
 import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
 
@@ -627,7 +627,13 @@ export class Bridge {
       }
       if (fresh.length === 0) continue
       try {
-        await this.sendText(chat, formatPush(fresh as never))
+        for (const item of fresh) {
+          const cover = item.coverUrl
+          if (cover !== undefined && cover !== '') {
+            await this.sendImageRemote(chat, cover)
+          }
+          await this.sendText(chat, formatItem(item as never))
+        }
         await this.subStore.ack(fresh.map(item => item.id), 'napcat:' + key)
         this.opts.log('info', '订阅推送 ' + key + '：' + fresh.length + ' 条')
       } catch (error) {
@@ -3493,6 +3499,26 @@ export class Bridge {
     const message: ObSegment[] = [{ type: 'image', data: { file: url } }]
     const sent = await this.sendSegments(chat, message)
     if (sent) this.opts.log('info', '已发送图片到 QQ: ' + chat.ref.key + ' (' + name + ')')
+  }
+
+  /** 发远端封面图（B 站图床带 Referer）；失败返回 false，由调用方退回纯文字 */
+  private async sendImageRemote(chat: ChatState, url: string): Promise<boolean> {
+    if (this.opts.config.dryRun) {
+      this.opts.log('info', '[dryRun] 本应发送封面: ' + chat.ref.key + ' ← ' + url)
+      return true
+    }
+    try {
+      const packed = await fetchToBase64Url(url, this.opts.config.outboundImageMaxBytes, {
+        Referer: 'https://www.bilibili.com/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+      })
+      const sent = await this.sendSegments(chat, [{ type: 'image', data: { file: packed.url } }])
+      if (sent) this.opts.log('info', '已发送订阅封面到 QQ: ' + chat.ref.key)
+      return sent
+    } catch (error) {
+      this.opts.log('debug', '订阅封面发送失败（退回纯文字）: ' + describe(error))
+      return false
+    }
   }
 
   /** 统一的发送入口：重试 + 禁言探测；dryRun 时只记日志并返回成功。 */

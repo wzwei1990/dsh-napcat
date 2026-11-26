@@ -19,6 +19,9 @@ export interface BiliOutboxItem {
   subName: string
   providerLabel: string
   extra?: string
+  /** 封面/配图 URL（有就发图，失败退回纯文字） */
+  coverUrl?: string
+  images?: string[]
 }
 
 /** dsh-bili 暴露的订阅服务（只依赖这一小部分） */
@@ -42,7 +45,16 @@ function clockOf(seconds: number): string {
   return String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0')
 }
 
-/** 把若干条更新拼成一条群消息 */
+/** 单条更新 → 推送文字（与封面图配对发送） */
+export function formatItem(item: BiliOutboxItem): string {
+  const icon = item.kind === 'video' ? '🎬' : '📝'
+  const meta = item.extra !== undefined && item.extra !== '' ? '（' + item.extra + '）' : ''
+  const lines = [icon + ' ' + item.subName + ' 更新了' + (item.kind === 'video' ? '视频' : '动态'), item.title + meta]
+  if (item.url !== '') lines.push(item.url)
+  return lines.join('\n')
+}
+
+/** 把若干条更新拼成一条群消息（没有封面的兜底格式） */
 export function formatPush(items: readonly BiliOutboxItem[]): string {
   const first = items[0]
   const label = first === undefined ? '' : first.providerLabel

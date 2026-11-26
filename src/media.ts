@@ -170,3 +170,32 @@ export async function downloadToFileStream(
   await handle.close()
   return { path: target, bytes }
 }
+
+
+/** 远端图片 → base64://（可带 Referer 等头；B 站图床对 Referer 敏感） */
+export function normalizeRemoteUrl(raw: string): string {
+  const url = raw.trim()
+  if (url === '') return url
+  if (url.startsWith('//')) return 'https:' + url
+  if (url.startsWith('http://')) return 'https://' + url.slice('http://'.length)
+  return url
+}
+
+export async function fetchToBase64Url(
+  url: string,
+  maxBytes: number,
+  headers: Record<string, string> = {},
+): Promise<{ url: string; bytes: number; name: string }> {
+  const response = await fetch(normalizeRemoteUrl(url), {
+    headers,
+    redirect: 'follow',
+    signal: AbortSignal.timeout(15000),
+  })
+  if (!response.ok) throw new Error('HTTP ' + String(response.status) + ': ' + url)
+  const buffer = Buffer.from(await response.arrayBuffer())
+  if (buffer.byteLength > maxBytes) {
+    throw new Error('图片超过上限 ' + Math.round(maxBytes / 1024 / 1024) + 'MB（实际 ' + Math.round(buffer.byteLength / 1024) + 'KB）: ' + url)
+  }
+  const name = safeName(url.split('?')[0]?.split('/').pop() ?? 'cover.jpg', 'cover.jpg')
+  return { url: 'base64://' + buffer.toString('base64'), bytes: buffer.byteLength, name }
+}

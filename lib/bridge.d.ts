@@ -493,6 +493,8 @@ export declare class Bridge {
     private memeLib;
     /** 把本地图片文件作为图片消息发出去（带重试/禁言处理；dryRun 时只记日志）。 */
     private sendImagePath;
+    /** 发远端封面图（B 站图床带 Referer）；失败返回 false，由调用方退回纯文字 */
+    private sendImageRemote;
     /** 统一的发送入口：重试 + 禁言探测；dryRun 时只记日志并返回成功。 */
     private sendSegments;
 }

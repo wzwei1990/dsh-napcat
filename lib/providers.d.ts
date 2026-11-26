@@ -27,6 +27,7 @@ export interface BiliServiceLike {
         pubdate: number;
         durationSec: number;
         url: string;
+        cover?: string;
     }>>;
     upDynamics?: (mid: number, limit?: number) => Promise<Array<{
         id: string;
@@ -35,6 +36,7 @@ export interface BiliServiceLike {
         pubdate: number;
         url: string;
         imageCount: number;
+        images?: string[];
     }>>;
     /** 空间接口风控剩余时间（ms），0=正常 */
     spaceRiskRemainingMs?: () => number;
@@ -55,6 +57,8 @@ export interface BiliServiceLike {
         total: number;
     }>;
 }
+/** 播放量/点赞数 → 1.2万 / 3.4亿 */
+export declare function humanCount(value: number): string;
 export interface ProviderRegistryOptions {
     ctx: Context;
     log: (level: 'debug' | 'info' | 'warn', message: string) => void;

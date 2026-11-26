@@ -1761,3 +1761,51 @@ test('订阅清理：空 groups 订阅 / 孤儿队列 / 过期条目', async () 
   assert.equal(lines.length, 1, '只剩一条没过期、且 subKey 仍存在的条目')
   assert.match(lines[0], /"fresh"/)
 })
+
+test('B 站数据源：投稿/动态都带封面图字段', async () => {
+  const { BiliFeedProvider } = await import('../lib/providers.js')
+  const svc = {
+    resolveUp: async () => ({ mid: 1, name: 'UP' }),
+    upVideos: async () => ([
+      { bvid: 'BV1', title: '视频', pubdate: 300, durationSec: 180, url: 'https://b23.tv/BV1', cover: 'https://i0.hdslb.com/a.jpg', play: 1234 },
+    ]),
+    upDynamics: async () => ([
+      { id: 'd1', type: 'DYNAMIC_TYPE_DRAW', text: '图集', pubdate: 200, url: 'https://t.bilibili.com/d1', imageCount: 2, images: ['https://i0.hdslb.com/1.jpg', 'https://i0.hdslb.com/2.jpg'] },
+    ]),
+  }
+  const provider = new BiliFeedProvider(svc)
+  const items = await provider.latest('1', ['video', 'dynamic'])
+  const video = items.find(item => item.kind === 'video')
+  const dynamic = items.find(item => item.kind === 'dynamic')
+  assert.equal(video.coverUrl, 'https://i0.hdslb.com/a.jpg')
+  assert.equal(dynamic.coverUrl, 'https://i0.hdslb.com/1.jpg')
+  assert.deepEqual(dynamic.images, ['https://i0.hdslb.com/1.jpg', 'https://i0.hdslb.com/2.jpg'])
+})
+
+test('B 站订阅推送文案：单条卡片含 UP、标题、链接、时长', async () => {
+  const { formatItem } = await import('../lib/bilipush.js')
+  const text = formatItem({
+    id: 'v1', kind: 'video', title: '新视频标题', url: 'https://b23.tv/x',
+    pubdate: 1, groups: ['group:1'], subName: '半佛仙人', providerLabel: 'B站', extra: '3 分钟',
+  })
+  assert.ok(text.includes('半佛仙人'))
+  assert.ok(text.includes('新视频标题'))
+  assert.ok(text.includes('3 分钟'))
+  assert.ok(text.includes('https://b23.tv/x'))
+  assert.ok(!text.includes('undefined'))
+})
+
+test('远端图片地址规整：协议相对地址补 https', async () => {
+  const { normalizeRemoteUrl } = await import('../lib/media.js')
+  assert.equal(normalizeRemoteUrl('//i0.hdslb.com/a.jpg'), 'https://i0.hdslb.com/a.jpg')
+  assert.equal(normalizeRemoteUrl('http://i0.hdslb.com/a.jpg'), 'https://i0.hdslb.com/a.jpg')
+  assert.equal(normalizeRemoteUrl('https://i0.hdslb.com/a.jpg'), 'https://i0.hdslb.com/a.jpg')
+})
+
+test('播放量格式化：万/亿', async () => {
+  const { humanCount } = await import('../lib/providers.js')
+  assert.equal(humanCount(0), '')
+  assert.equal(humanCount(999), '999')
+  assert.equal(humanCount(12345), '1.2万')
+  assert.equal(humanCount(100000000), '1亿')
+})
