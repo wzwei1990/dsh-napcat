@@ -104,6 +104,8 @@ export declare class Bridge {
     private readonly gameWiki;
     /** B 站链接 → 「看过」上下文（弹幕高光 + 字幕节选） */
     private readonly biliLink;
+    /** 抖音链接 → 元数据上下文（标题/作者/点赞，走 amagi） */
+    private readonly douyinLink;
     /** B 站 UP 更新 → 群推送（读 outbox，ack 后不重复） */
     private readonly biliPusher;
     /** 订阅表（B 站/以后其它平台共用） */

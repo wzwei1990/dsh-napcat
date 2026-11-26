@@ -44,6 +44,7 @@ import { findKeyword, mentions, repliesTo, repliesToAny, segmentsOf, shortHash, 
 import { MemoryStore } from './memory.js'
 import { GameWiki } from './gamewiki.js'
 import { BiliLink, extractBiliLink } from './bililink.js'
+import { DouyinLink, extractDouyinLink } from './douyinlink.js'
 import { extractHeyboxLink, fetchHeyboxPost, renderHeyboxBlock } from './heybox.js'
 import { BiliPusher, formatItem, formatPush } from './bilipush.js'
 import { workspaceDirFor } from './workspace.js'
@@ -170,6 +171,8 @@ export class Bridge {
   private readonly gameWiki: GameWiki
   /** B 站链接 → 「看过」上下文（弹幕高光 + 字幕节选） */
   private readonly biliLink: BiliLink
+  /** 抖音链接 → 元数据上下文（标题/作者/点赞，走 amagi） */
+  private readonly douyinLink: DouyinLink
   /** B 站 UP 更新 → 群推送（读 outbox，ack 后不重复） */
   private readonly biliPusher: BiliPusher
   /** 订阅表（B 站/以后其它平台共用） */
@@ -220,6 +223,7 @@ export class Bridge {
       storyboard: opts.config.biliStoryboard,
       log: opts.log,
     })
+    this.douyinLink = new DouyinLink({ ctx: opts.ctx, enabled: true, log: opts.log })
     this.mem = new MemoryStore({
       ctx: opts.ctx,
       root: normalizePath(join(normalizePath(opts.config.workspacePath) || process.cwd(), 'memory')),
@@ -993,8 +997,10 @@ export class Bridge {
       // 词表召回：命中就把"可能是哪个游戏 + 可查工具"交给模型，由它决定查不查
       const gameHint = await this.gameWiki.hintFor(recent.slice(-3).join('\n'), chat.ref.key)
       const biliHint = await this.biliLink.blockFor(recent.slice(-3).join('\n'))
+      const douyinHint = await this.douyinLink.blockFor(recent.slice(-3).join('\n'), chat.ref.key)
       await this.dispatch(chat,
         (biliHint === undefined ? '' : biliHint + '\n\n')
+        + (douyinHint === undefined ? '' : douyinHint + '\n\n')
         + (gameHint === undefined ? '' : gameHint + '\n\n')
         + (memoryBlock === '' ? '' : memoryBlock + '\n\n')
         + (await this.linkHintOf(recent))
@@ -1624,6 +1630,9 @@ export class Bridge {
     if (this.opts.config.biliEnabled) {
       void this.biliLink.note(ref.key, rawText).catch(() => undefined)
     }
+    if (extractDouyinLink(rawText) !== undefined) {
+      void this.douyinLink.note(ref.key, rawText).catch(() => undefined)
+    }
     if (this.opts.config.memoryEnabled) {
       if (this.opts.config.imageCache === 'all') {
         // 图片要落盘并写进记录（异步，不阻塞本条消息处理）
@@ -1784,7 +1793,16 @@ export class Bridge {
     const gameHint = await this.gameWiki.hintFor(textWithoutImageMarkers, chat.ref.key)
     // B 站链接：解析弹幕/字幕，让模型"看过"再接话
     const biliHint = await this.biliLink.blockFor(textWithoutImageMarkers)
-    const text = [biliHint ?? '', recentBiliHint, gameHint ?? '', memoryBlock, visualHint, linkHint, textWithoutImageMarkers, ...media.notes].filter(part => part !== '').join('\n\n')
+    // 抖音链接：元数据（amagi），拿不到就静默
+    const douyinHint = await this.douyinLink.blockFor(textWithoutImageMarkers, ref.key)
+    const recentDouyin = extractDouyinLink(textWithoutImageMarkers) === undefined
+      ? this.douyinLink.recentOf(ref.key)
+      : undefined
+    const recentDouyinHint = recentDouyin === undefined
+      ? ''
+      : '【群里刚发过抖音视频】' + recentDouyin.title + '（' + recentDouyin.url + '）\n'
+        + '- 如果这几句在聊它，用你知道的（标题/作者）接话；需要画面或台词就调 douyin_parse 那个链接。\n'
+    const text = [biliHint ?? '', douyinHint ?? '', recentBiliHint, recentDouyinHint, gameHint ?? '', memoryBlock, visualHint, linkHint, textWithoutImageMarkers, ...media.notes].filter(part => part !== '').join('\n\n')
     if (text.trim() === '') {
       this.opts.log('debug', '空消息（无文本也没有可下载的媒体），跳过: ' + ref.key)
       return

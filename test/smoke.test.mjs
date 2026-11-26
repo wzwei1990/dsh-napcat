@@ -1809,3 +1809,44 @@ test('播放量格式化：万/亿', async () => {
   assert.equal(humanCount(12345), '1.2万')
   assert.equal(humanCount(100000000), '1亿')
 })
+
+test('抖音链接：只认抖音域，能从分享文案里抠出来', async () => {
+  const { extractDouyinLink } = await import('../lib/douyinlink.js')
+  const text = '3.30 复制打开抖音，看看【镜三一的作品】如果杰森这样来接露西娅... https://v.douyin.com/BEKMN41TOjg/ 03/02'
+  assert.equal(extractDouyinLink(text), 'https://v.douyin.com/BEKMN41TOjg/')
+  assert.equal(extractDouyinLink('https://evil.com/douyin.com/video/1'), undefined)
+  assert.equal(extractDouyinLink('https://www.bilibili.com/video/BV1xx'), undefined)
+})
+
+test('抖音上下文块：标题/作者/时长/点赞/简介/链接', async () => {
+  const { formatDouyinBlock } = await import('../lib/douyinlink.js')
+  const block = formatDouyinBlock({
+    title: '如果杰森这样来接露西娅...',
+    uploader: '镜三一',
+    durationSec: 15,
+    likes: 234,
+    description: '如果杰森这样来接露西娅...\n#GTA6发售',
+    url: 'https://www.douyin.com/video/7710868482187698107',
+  })
+  assert.ok(block.includes('【抖音视频】'))
+  assert.ok(block.includes('镜三一'))
+  assert.ok(block.includes('00:15'))
+  assert.ok(block.includes('234 赞'))
+  assert.ok(block.includes('douyin_parse'))
+})
+
+test('抖音链接：dshBili 服务缺失时静默跳过', async () => {
+  const { DouyinLink } = await import('../lib/douyinlink.js')
+  const link = new DouyinLink({ ctx: { get: () => undefined }, enabled: true, log: () => {} })
+  assert.equal(await link.blockFor('https://v.douyin.com/abc/'), undefined)
+})
+
+test('抖音链接：有服务时注入 + 记住最近视频', async () => {
+  const { DouyinLink } = await import('../lib/douyinlink.js')
+  const svc = { douyinMeta: async () => ({ title: 'T', uploader: 'U', durationSec: 12, url: 'https://www.douyin.com/video/1' }) }
+  const link = new DouyinLink({ ctx: { get: () => svc }, enabled: true, log: () => {} })
+  const block = await link.blockFor('https://www.douyin.com/video/1', 'group:1')
+  assert.ok(block?.includes('【抖音视频】T'))
+  const recent = link.recentOf('group:1')
+  assert.equal(recent?.title, 'T')
+})
