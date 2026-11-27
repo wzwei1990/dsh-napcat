@@ -2193,7 +2193,35 @@ export class Bridge {
           const info = await this.opts.conn.call<{ url?: string; file?: string }>('get_image', { file: fileRef })
           const url = info?.url
           if (url === undefined || url === '') throw new Error('get_image 没有返回 url')
-          const saved = await downloadToFile(url, inbox, nameFromRef(fileRef, 'image.png'), DEFAULT_MAX_IMAGE_BYTES)
+          // NapCat 的图片链接是带 rkey 的临时地址：先试 get_image 的 url，再试消息段自带的 url；
+          // 仍失败就重新 get_image 一次（拿新 rkey）。QQ 侧返回 400/403 时基本都是 rkey 失效。
+          const segmentUrl = String((seg.data as { url?: unknown } | undefined)?.url ?? '')
+          const candidates = [...new Set([url, segmentUrl].filter(item => /^https?:\/\//i.test(item)))]
+          const failures: string[] = []
+          let saved: { path: string; bytes: number } | undefined
+          const tryDownload = async (candidate: string): Promise<void> => {
+            try {
+              saved = await downloadToFile(candidate, inbox, nameFromRef(fileRef, 'image.png'), DEFAULT_MAX_IMAGE_BYTES)
+            } catch (error) {
+              failures.push(describe(error))
+            }
+          }
+          for (const candidate of candidates) {
+            await tryDownload(candidate)
+            if (saved !== undefined) break
+          }
+          if (saved === undefined) {
+            try {
+              const refreshed = await this.opts.conn.call<{ url?: string }>('get_image', { file: fileRef })
+              const fresh = String(refreshed?.url ?? '')
+              if (fresh !== '' && !candidates.includes(fresh)) await tryDownload(fresh)
+            } catch (error) {
+              failures.push('重新 get_image 失败: ' + describe(error))
+            }
+          }
+          if (saved === undefined) {
+            throw new Error('图片下载失败（通常是 QQ 图片 rkey 过期，或 NapCat/协议端拿不到在线 rkey）：' + failures.slice(-2).join('；'))
+          }
           const summary = String((seg.data as { summary?: unknown } | undefined)?.summary ?? '')
           const verdict = await this.stickerOfFile(saved.path, saved.bytes, summary, inbox, false)
           const seenCount = verdict.count
