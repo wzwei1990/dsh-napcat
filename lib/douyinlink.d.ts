@@ -14,9 +14,22 @@ export interface DouyinMetaLike {
     url: string;
     likes?: number;
 }
+export interface DouyinStoryboardLike {
+    imagePath: string;
+    timeline: Array<{
+        index: number;
+        label: string;
+    }>;
+}
+export interface DouyinAnalysisLike {
+    meta: DouyinMetaLike;
+    storyboard?: DouyinStoryboardLike;
+    audioPath?: string;
+}
 /** dshBili 暴露的服务（只依赖这一小部分） */
 export interface DouyinServiceLike {
     douyinMeta?: (input: string) => Promise<DouyinMetaLike>;
+    douyinAnalyze?: (input: string) => Promise<DouyinAnalysisLike>;
 }
 export interface DouyinLinkOptions {
     ctx: Context;
@@ -26,15 +39,18 @@ export interface DouyinLinkOptions {
 /** 从一段文本里抽第一个抖音链接 */
 export declare function extractDouyinLink(text: string): string | undefined;
 /** 注入给模型的上下文块（纯函数，方便单测） */
-export declare function formatDouyinBlock(meta: DouyinMetaLike): string;
+export declare function formatDouyinBlock(meta: DouyinMetaLike, storyboard?: DouyinStoryboardLike): string;
 export declare class DouyinLink {
     private readonly options;
     /** 最近解析过的链接（按会话），让"没 @ 我"时也能接上刚才的视频 */
     private readonly recent;
     private readonly cache;
+    private readonly analysisCache;
     constructor(options: DouyinLinkOptions);
     private service;
     private meta;
+    /** 抖音完整分析（带 15s 预算；失败退回元数据） */
+    private analyze;
     /** 消息里有抖音链接就返回注入块（传 chatKey 时会记进"最近发过"） */
     blockFor(text: string, chatKey?: string): Promise<string | undefined>;
     /** 观察层：看到链接就后台解析一次（不阻塞回复） */
@@ -43,5 +59,6 @@ export declare class DouyinLink {
     recentOf(chatKey: string): {
         title: string;
         url: string;
+        link: string;
     } | undefined;
 }

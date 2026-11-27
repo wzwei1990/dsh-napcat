@@ -1850,3 +1850,31 @@ test('抖音链接：有服务时注入 + 记住最近视频', async () => {
   const recent = link.recentOf('group:1')
   assert.equal(recent?.title, 'T')
 })
+
+test('抖音链接：有 douyinAnalyze 时自动带分镜', async () => {
+  const { DouyinLink } = await import('../lib/douyinlink.js')
+  const svc = {
+    douyinMeta: async () => ({ title: 'M', url: 'https://www.douyin.com/video/1' }),
+    douyinAnalyze: async () => ({
+      meta: { title: 'M', uploader: 'U', durationSec: 12, likes: 3, url: 'https://www.douyin.com/video/1' },
+      storyboard: { imagePath: 'C:/tmp/story.png', timeline: [{ index: 1, label: '00:01' }] },
+    }),
+  }
+  const link = new DouyinLink({ ctx: { get: () => svc }, enabled: true, log: () => {} })
+  const block = await link.blockFor('https://www.douyin.com/video/1', 'group:1')
+  assert.ok(block?.includes('画面分镜'))
+  assert.ok(block?.includes('C:/tmp/story.png'))
+  assert.ok(block?.includes('#1 00:01'))
+})
+
+test('抖音链接：分析失败时退回元数据，不抛错', async () => {
+  const { DouyinLink } = await import('../lib/douyinlink.js')
+  const svc = {
+    douyinMeta: async () => ({ title: 'M', url: 'https://www.douyin.com/video/1' }),
+    douyinAnalyze: async () => { throw new Error('boom') },
+  }
+  const link = new DouyinLink({ ctx: { get: () => svc }, enabled: true, log: () => {} })
+  const block = await link.blockFor('https://www.douyin.com/video/1')
+  assert.ok(block?.includes('【抖音视频】M'))
+  assert.ok(!block?.includes('画面分镜'))
+})

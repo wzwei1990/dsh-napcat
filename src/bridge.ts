@@ -997,7 +997,14 @@ export class Bridge {
       // 词表召回：命中就把"可能是哪个游戏 + 可查工具"交给模型，由它决定查不查
       const gameHint = await this.gameWiki.hintFor(recent.slice(-3).join('\n'), chat.ref.key)
       const biliHint = await this.biliLink.blockFor(recent.slice(-3).join('\n'))
-      const douyinHint = await this.douyinLink.blockFor(recent.slice(-3).join('\n'), chat.ref.key)
+      let douyinHint = await this.douyinLink.blockFor(recent.slice(-3).join('\n'), chat.ref.key)
+      if (douyinHint === undefined) {
+        const recentDy = this.douyinLink.recentOf(chat.ref.key)
+        if (recentDy !== undefined) {
+          // 10 分钟内的链接：blockFor 会命中缓存，直接带回分镜，不重复下载
+          douyinHint = await this.douyinLink.blockFor(recentDy.link, chat.ref.key)
+        }
+      }
       await this.dispatch(chat,
         (biliHint === undefined ? '' : biliHint + '\n\n')
         + (douyinHint === undefined ? '' : douyinHint + '\n\n')
@@ -1793,7 +1800,7 @@ export class Bridge {
     const gameHint = await this.gameWiki.hintFor(textWithoutImageMarkers, chat.ref.key)
     // B 站链接：解析弹幕/字幕，让模型"看过"再接话
     const biliHint = await this.biliLink.blockFor(textWithoutImageMarkers)
-    // 抖音链接：元数据（amagi），拿不到就静默
+    // 抖音链接：自动分析（元数据 + 分镜），失败退回元数据
     const douyinHint = await this.douyinLink.blockFor(textWithoutImageMarkers, ref.key)
     const recentDouyin = extractDouyinLink(textWithoutImageMarkers) === undefined
       ? this.douyinLink.recentOf(ref.key)
